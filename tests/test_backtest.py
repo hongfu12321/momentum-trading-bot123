@@ -116,3 +116,11 @@ def test_signals_from_breakouts_uses_signal_available_time_and_sample_filter() -
     out = signals_from_breakouts(rows, {"in_sample"})
     assert [(s.symbol, s.available_utc) for s in out] == [("A", AVAIL)]
     assert signals_from_breakouts(rows, {"out_of_sample"})[0].available_utc == AVAIL  # derived from bar start
+
+
+def test_cli_requires_explicit_confirmation_for_out_of_sample(tmp_path, capsys) -> None:  # noqa: ANN001
+    from momentum_bot.cli import EXIT_USAGE, main
+
+    (tmp_path / "breakout_matches.csv").write_text("kind\n", encoding="utf-8")
+    assert main(["m2-backtest", "--dataset", str(tmp_path), "--sample", "out_of_sample"]) == EXIT_USAGE
+    assert "--confirm-out-of-sample" in capsys.readouterr().err

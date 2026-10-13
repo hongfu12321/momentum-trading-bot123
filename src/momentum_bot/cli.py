@@ -199,8 +199,7 @@ def _backtest(args: argparse.Namespace) -> int:
         print(f"error: SIP quotes blocked: {exc}", file=sys.stderr)
         return EXIT_BLOCKED
     path = dataset / f"backtest_summary_{args.sample}.json"
-    path.write_text(json.dumps(summary, indent=2, default=str) + "
-", encoding="utf-8")
+    path.write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
     print(f"summary: {path} ({provider.request_count} API requests, 0 orders)")
     return EXIT_OK
 
