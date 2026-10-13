@@ -29,9 +29,10 @@ python -m pip install -e ".[dev]"
 Copy-Item .env.example .env         # then fill in Alpaca keys
 ```
 
-If `python` opens the Microsoft Store or is not recognized, close and reopen
-PowerShell (and VS Code, if using its integrated terminal). To fix the current
-PowerShell window immediately, add the install directory to its PATH:
+The VS Code workspace terminal prepends the Python 3.12 install directories
+to PATH. Open a **new integrated terminal** after installing Python. In an
+external PowerShell window, close and reopen it to pick up the user PATH. To
+fix an already-open PowerShell window immediately, run:
 
 ```powershell
 $python312 = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312'
@@ -39,8 +40,8 @@ $env:Path = "$python312;$python312\Scripts;$env:Path"
 python --version
 ```
 
-For future terminals, ensure `$env:LOCALAPPDATA\Programs\Python\Python312` and
-its `Scripts` subdirectory are in your user PATH.
+For external terminals, ensure `$env:LOCALAPPDATA\Programs\Python\Python312`
+and its `Scripts` subdirectory are in your user PATH.
 
 ### macOS and Linux
 
@@ -75,13 +76,31 @@ For each trading day (plus the prior trading day, for reference closes) it reque
 
 Exit codes: `0` complete, `1` partial (some requests failed), `2` usage/credential error, `3` entitlement- or auth-blocked. If SIP is refused, the run still writes an explicit `sip_entitlement_blocked` report; IEX is never substituted for SIP.
 
-## M1-B dataset command (broad universe, 20–30 trading days)
+## Dataset command (broad universe, multi-day)
 
 ```bash
-momentum-bot m1-dataset --start 2026-08-28 --end 2026-10-09 --out-dir reports/datasets/m1b_20260828_20261009
+momentum-bot m1-dataset --start 2026-06-03 --end 2026-10-09 --out-dir reports/datasets/m2_sip_20260603_20261009
 ```
 
-Builds an approximate point-in-time universe (Nasdaq Trader listing snapshot + symbols delisted or renamed since the start date, from Alpaca corporate actions), then for every trading day fetches premarket and after-hours 1m SIP and IEX bars for every symbol whose prior official close makes it able to qualify, and scans both feeds against the same SIP reference close. Directory and corporate-action snapshots are saved under `inputs/` and raw bars under `cache/`; rerunning on the same folder reuses them, so results are reproducible and resumable. See `reports/m1_feasibility.md` for findings.
+Builds an approximate point-in-time universe: a Nasdaq Trader listing snapshot, plus symbols delisted or renamed since the start date (Alpaca corporate actions), plus inactive and OTC symbols from a **read-only** `GET /v2/assets` on Alpaca's **paper** host (skip with `--no-alpaca-assets`). Then for every trading day it fetches premarket and after-hours 1m SIP and IEX bars for every symbol whose prior official close lets it qualify, and scans both feeds against the same SIP reference close. Trading days are split chronologically into in-sample, a one-day embargo and the most recent third as out-of-sample (`--oos-fraction`, `--embargo-days`).
+
+Snapshots are saved under `inputs/` and raw bars under `cache/`; rerunning on the same folder reuses them, so results are reproducible and resumable. Findings: `reports/m1_feasibility.md` and `reports/m2_data_readiness.md`.
+
+## SIP quote probe (M2 prerequisite)
+
+```bash
+momentum-bot m2-quote-probe --dataset reports/datasets/m2_sip_20260603_20261009 --sample 60 --minutes 30
+```
+
+Samples scanner candidates deterministically, fetches SIP NBBO quotes for the window after each trigger, and reports availability, spreads, locked/crossed quotes, gaps and the cost of fetching quotes for every candidate. Raw quotes stay in the local cache.
+
+## Licensed data stays local
+
+Raw bars, quotes, per-symbol tables and input snapshots are Alpaca or third-party data and are git-ignored. Only aggregate outputs are committed: `report.md`, `manifest.json` (including the sha256 of every input snapshot), count-only `eligibility.csv` and `quote_probe_summary.json`.
+
+## Safety
+
+No code path places, replaces or cancels orders. Market data comes from `data.alpaca.markets`. The only trading-host call is the read-only `GET /v2/assets` on `paper-api.alpaca.markets`, which refuses live-looking keys. A test enforces both.
 
 ## Tests
 
