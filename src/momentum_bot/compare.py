@@ -13,7 +13,7 @@ from datetime import date, datetime
 from statistics import fmean
 
 from .data.coverage import missing_intervals
-from .data.market_calendar import PREMARKET, REGULAR, SessionWindow
+from .data.market_calendar import AFTERHOURS, PREMARKET, REGULAR, SessionWindow
 from .data.normalize import BAR_LENGTH, SessionBar
 from .data.provider import Bar
 
@@ -29,6 +29,9 @@ class ScanParams:
     min_session_volume: int = 100_000
     breakout_volume_multiple: float = 2.0
     breakout_lookback: int = 5
+    # The first after-hours 1m SIP bar carries the closing auction and late regular-session prints
+    # (tens of times normal volume); count it as zero volume for after-hours gating and breakouts.
+    exclude_closing_auction_bar: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,16 +79,19 @@ def reference_close(
 
 
 def scan_session(
-    feed: str, key: Key, bars: list[Bar], ref_close: float | None, params: ScanParams
+    feed: str, key: Key, bars: list[Bar], ref_close: float | None, params: ScanParams,
+    session_start: datetime | None = None,
 ) -> tuple[Event | None, list[Event]]:
     symbol, d, session = key
+    skip_auction = params.exclude_closing_auction_bar and session == AFTERHOURS and session_start is not None
+    vols = [0 if skip_auction and b.timestamp_utc == session_start else b.volume for b in bars]
     min_change = params.premarket_min_change if session == PREMARKET else params.afterhours_min_change
     candidate: Event | None = None
     breakouts: list[Event] = []
     cum_vol = 0
     session_high = float("-inf")
     for i, bar in enumerate(bars):
-        cum_vol += bar.volume
+        cum_vol += vols[i]
         change = bar.close / ref_close - 1 if ref_close else None
         in_band = params.min_price <= bar.close <= params.max_price
         gate = in_band and change is not None and change >= min_change and cum_vol >= params.min_session_volume
@@ -97,9 +103,8 @@ def scan_session(
         if gate and candidate is None:
             candidate = event("candidate")
         if i >= params.breakout_lookback and in_band:
-            prior = bars[i - params.breakout_lookback : i]
-            mean_vol = fmean(b.volume for b in prior)
-            if bar.close > session_high and bar.volume >= params.breakout_volume_multiple * mean_vol > 0:
+            mean_vol = fmean(vols[i - params.breakout_lookback : i])
+            if bar.close > session_high and vols[i] >= params.breakout_volume_multiple * mean_vol > 0:
                 breakouts.append(event("breakout"))
         session_high = max(session_high, bar.high)
     return candidate, breakouts

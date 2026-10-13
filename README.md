@@ -50,6 +50,14 @@ For each trading day (plus the prior trading day, for reference closes) it reque
 
 Exit codes: `0` complete, `1` partial (some requests failed), `2` usage/credential error, `3` entitlement- or auth-blocked. If SIP is refused, the run still writes an explicit `sip_entitlement_blocked` report; IEX is never substituted for SIP.
 
+## M1-B dataset command (broad universe, 20–30 trading days)
+
+```bash
+momentum-bot m1-dataset --start 2026-08-28 --end 2026-10-09 --out-dir reports/datasets/m1b_20260828_20261009
+```
+
+Builds an approximate point-in-time universe (Nasdaq Trader listing snapshot + symbols delisted or renamed since the start date, from Alpaca corporate actions), then for every trading day fetches premarket and after-hours 1m SIP and IEX bars for every symbol whose prior official close makes it able to qualify, and scans both feeds against the same SIP reference close. Directory and corporate-action snapshots are saved under `inputs/` and raw bars under `cache/`; rerunning on the same folder reuses them, so results are reproducible and resumable. See `reports/m1_feasibility.md` for findings.
+
 ## Tests
 
 ```bash

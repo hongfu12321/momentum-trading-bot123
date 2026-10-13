@@ -7,3 +7,8 @@ __pycache__/
 build/
 dist/
 reports/runs/
+# M1-B datasets: raw bars, Alpaca-sourced snapshots and large gzip tables stay local (manifest.json records their sha256).
+reports/datasets/*/cache/
+reports/datasets/*/inputs/
+reports/datasets/**/*.csv.gz
+reports/datasets/**/*.tmp
