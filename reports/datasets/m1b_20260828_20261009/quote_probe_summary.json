@@ -1,0 +1,98 @@
+{
+  "dataset": "reports\\datasets\\m1b_20260828_20261009",
+  "sample": 60,
+  "seed": 20261013,
+  "code_sha": "c220ebe",
+  "created_at_utc": "2026-10-13T18:25:58.850849+00:00",
+  "feed": "sip",
+  "orders_placed": 0,
+  "window_minutes_after_trigger": 30,
+  "status_counts": {
+    "ok": 60
+  },
+  "errors": [],
+  "by_session": {
+    "premarket": {
+      "windows": 30,
+      "windows_with_any_quote": 30,
+      "quotes_per_window": {
+        "n": 30,
+        "median": 6580.5,
+        "p10": 252.0,
+        "p90": 33868.0
+      },
+      "minute_coverage": {
+        "n": 30,
+        "median": 1.0,
+        "p10": 0.7,
+        "p90": 1.0
+      },
+      "median_spread_bps": {
+        "n": 30,
+        "median": 83.33912077227593,
+        "p10": 32.310177705978134,
+        "p90": 147.6014760147603
+      },
+      "time_weighted_spread_bps": {
+        "n": 30,
+        "median": 86.41470130970606,
+        "p10": 50.03770996014411,
+        "p90": 201.61907312302054
+      },
+      "max_gap_seconds": {
+        "n": 30,
+        "median": 29.4776825,
+        "p10": 3.932712,
+        "p90": 252.375753
+      },
+      "crossed_share": 0.004461798539992397,
+      "locked_share": 0.2437968805667871,
+      "one_sided_share": 7.173309549827003e-06
+    },
+    "afterhours": {
+      "windows": 30,
+      "windows_with_any_quote": 30,
+      "quotes_per_window": {
+        "n": 30,
+        "median": 1584.0,
+        "p10": 130.0,
+        "p90": 5156.0
+      },
+      "minute_coverage": {
+        "n": 30,
+        "median": 1.0,
+        "p10": 0.6333333333333333,
+        "p90": 1.0
+      },
+      "median_spread_bps": {
+        "n": 30,
+        "median": 94.86343711363389,
+        "p10": 41.40786749482314,
+        "p90": 246.94331896186662
+      },
+      "time_weighted_spread_bps": {
+        "n": 30,
+        "median": 120.79368952943526,
+        "p10": 66.18501617408663,
+        "p90": 246.54518149730052
+      },
+      "max_gap_seconds": {
+        "n": 30,
+        "median": 53.4127465,
+        "p10": 10.56343,
+        "p90": 216.141067
+      },
+      "crossed_share": 0.0036862669299057033,
+      "locked_share": 0.008145683478068783,
+      "one_sided_share": 0.0
+    }
+  },
+  "extrapolation_to_all_candidates": {
+    "candidates": 1204,
+    "mean_quotes_per_window": 8177.466666666666,
+    "estimated_quotes": 9845670,
+    "estimated_requests": 1204,
+    "estimated_hours_at_measured_rate": 0.29,
+    "estimated_raw_json_gb": 1.12
+  }
+}

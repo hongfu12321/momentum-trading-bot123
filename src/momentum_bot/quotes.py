@@ -23,6 +23,8 @@ from typing import Protocol
 from .data.market_calendar import session_windows
 from .data.provider import AuthenticationError, EntitlementError, ProviderError
 
+SPREAD_CAP_BPS = 50.0  # docs/DESIGN.md section 5: spread cap 0.5%
+
 
 class QuoteSource(Protocol):
     request_count: int
@@ -54,6 +56,7 @@ class QuoteWindowStats:
     median_spread_bps: float | None = None
     p90_spread_bps: float | None = None
     time_weighted_spread_bps: float | None = None
+    time_share_within_spread_cap: float | None = None
     max_gap_seconds: float | None = None
 
 
@@ -61,10 +64,12 @@ def _ts(raw: str) -> datetime:
     return datetime.fromisoformat(raw)  # Python 3.11+ accepts nanosecond fractions (truncated to µs)
 
 
-def summarize_quotes(quotes: Iterable[Mapping[str, object]], start: datetime, end: datetime) -> dict[str, object]:
+def summarize_quotes(
+    quotes: Iterable[Mapping[str, object]], start: datetime, end: datetime, spread_cap_bps: float = SPREAD_CAP_BPS,
+) -> dict[str, object]:
     """Pure statistics for one window. Spread is (ask - bid) / mid in basis points on valid two-sided quotes."""
     spreads: list[float] = []
-    weighted = weight = 0.0
+    weighted = weight = tight = 0.0
     minutes: set[int] = set()
     counts = {"quotes": 0, "two_sided": 0, "locked": 0, "crossed": 0, "one_sided": 0}
     last_t, last_spread, max_gap = start, None, 0.0
@@ -77,6 +82,7 @@ def summarize_quotes(quotes: Iterable[Mapping[str, object]], start: datetime, en
             dt = (t - last_t).total_seconds()
             weighted += last_spread * dt
             weight += dt
+            tight += dt if last_spread <= spread_cap_bps else 0.0
         bid, ask = float(q.get("bp") or 0), float(q.get("ap") or 0)  # type: ignore[arg-type]
         last_spread = None
         if bid <= 0 or ask <= 0:
@@ -91,8 +97,10 @@ def summarize_quotes(quotes: Iterable[Mapping[str, object]], start: datetime, en
         last_t = t
     max_gap = max(max_gap, (end - last_t).total_seconds())
     if last_spread is not None:
-        weighted += last_spread * (end - last_t).total_seconds()
-        weight += (end - last_t).total_seconds()
+        dt = (end - last_t).total_seconds()
+        weighted += last_spread * dt
+        weight += dt
+        tight += dt if last_spread <= spread_cap_bps else 0.0
     spreads.sort()
     return {
         **counts,
@@ -101,6 +109,7 @@ def summarize_quotes(quotes: Iterable[Mapping[str, object]], start: datetime, en
         "median_spread_bps": median(spreads) if spreads else None,
         "p90_spread_bps": spreads[min(len(spreads) - 1, int(0.9 * len(spreads)))] if spreads else None,
         "time_weighted_spread_bps": weighted / weight if weight else None,
+        "time_share_within_spread_cap": tight / (end - start).total_seconds() if end > start else None,
         "max_gap_seconds": max_gap,
     }
 
@@ -133,27 +142,29 @@ def probe(source: QuoteSource, candidates: list[dict[str, str]], minutes: int, r
             continue
         r0, b0, t0 = source.request_count, source.bytes_received, time.perf_counter()
         raw_path = raw_dir / f"{c['trading_date']}_{c['session']}_{c['symbol']}_{minutes}m.jsonl.gz"
+        cost_path = raw_path.with_name(raw_path.name.replace(".jsonl.gz", ".cost.json"))
         try:
-            if raw_path.is_file():
+            if raw_path.is_file() and cost_path.is_file():
                 with gzip.open(raw_path, "rt", encoding="utf-8") as fh:
                     rows = [json.loads(line) for line in fh]
                 stats.status = "cached"
+                cost = json.loads(cost_path.read_text(encoding="utf-8"))  # original fetch cost, for extrapolation
             else:
                 rows = list(source.iter_quotes(c["symbol"], "sip", start, end))
                 tmp = raw_path.with_suffix(".tmp")
                 with gzip.open(tmp, "wt", encoding="utf-8") as fh:
                     fh.writelines(json.dumps(q, sort_keys=True) + "\n" for q in rows)
                 tmp.replace(raw_path)
-            for k, v in summarize_quotes(rows, start, end).items():
+                cost = {"requests": source.request_count - r0, "bytes": source.bytes_received - b0,
+                        "seconds": round(time.perf_counter() - t0, 3)}
+                cost_path.write_text(json.dumps(cost), encoding="utf-8")
+            for k, v in {**summarize_quotes(rows, start, end), **cost}.items():
                 setattr(stats, k, v)
         except (EntitlementError, AuthenticationError) as exc:
             blocked = f"{type(exc).__name__}: {exc}"
             stats.status, stats.error = "entitlement_blocked", blocked
         except ProviderError as exc:
             stats.status, stats.error = "error", str(exc)
-        stats.requests = source.request_count - r0
-        stats.bytes = source.bytes_received - b0
-        stats.seconds = round(time.perf_counter() - t0, 3)
         out.append(stats)
     return out
 
@@ -166,8 +177,8 @@ def _q(values: list[float]) -> dict[str, float | None]:
 
 
 def summarize_probe(stats: list[QuoteWindowStats], total_candidates: int, minutes: int) -> dict[str, object]:
-    fetched = [s for s in stats if s.status == "ok"]
     usable = [s for s in stats if s.status in ("ok", "cached")]
+    fetched = [s for s in usable if s.requests]  # windows with a recorded original fetch cost
     by_session: dict[str, object] = {}
     for session in ("premarket", "afterhours"):
         g = [s for s in usable if s.session == session]
@@ -178,6 +189,9 @@ def summarize_probe(stats: list[QuoteWindowStats], total_candidates: int, minute
             "minute_coverage": _q([s.minutes_with_quote / s.minutes for s in g if s.minutes]),
             "median_spread_bps": _q([s.median_spread_bps for s in g if s.median_spread_bps is not None]),
             "time_weighted_spread_bps": _q([s.time_weighted_spread_bps for s in g if s.time_weighted_spread_bps is not None]),
+            "time_share_within_spread_cap": _q([s.time_share_within_spread_cap for s in g
+                                                if s.time_share_within_spread_cap is not None]),
+            "windows_never_within_spread_cap": sum(1 for s in g if not s.time_share_within_spread_cap),
             "max_gap_seconds": _q([s.max_gap_seconds for s in g if s.max_gap_seconds is not None]),
             "crossed_share": sum(s.crossed for s in g) / max(1, sum(s.quotes for s in g)),
             "locked_share": sum(s.locked for s in g) / max(1, sum(s.quotes for s in g)),
@@ -186,9 +200,11 @@ def summarize_probe(stats: list[QuoteWindowStats], total_candidates: int, minute
     mean_q = sum(s.quotes for s in usable) / len(usable) if usable else 0.0
     mean_bytes_per_quote = sum(s.bytes for s in fetched) / max(1, sum(s.quotes for s in fetched))
     sec_per_req = sum(s.seconds for s in fetched) / max(1, sum(s.requests for s in fetched))
-    est_requests = total_candidates * max(1.0, mean_q / 10_000)
+    req_per_window = sum(s.requests for s in fetched) / len(fetched) if fetched else 1.0
+    est_requests = total_candidates * req_per_window
     return {
         "window_minutes_after_trigger": minutes,
+        "spread_cap_bps": SPREAD_CAP_BPS,
         "status_counts": {k: sum(1 for s in stats if s.status == k) for k in sorted({s.status for s in stats})},
         "errors": sorted({s.error for s in stats if s.error}),
         "by_session": by_session,

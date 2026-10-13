@@ -87,6 +87,7 @@ def test_summarize_quotes_spreads_states_and_gaps() -> None:
     assert s["median_spread_bps"] == pytest.approx(0.1 / 10.05 * 10_000)
     # time weights: 99.5 bps for 30s, 0 bps for 30s, 200 bps for the last 30s
     assert s["time_weighted_spread_bps"] == pytest.approx((0.1 / 10.05 * 1e4 * 30 + 0.2 / 10.0 * 1e4 * 30) / 90)
+    assert s["time_share_within_spread_cap"] == pytest.approx(30 / 180)  # only the locked 30s is within 50 bps
 
 
 class FakeQuotes:
@@ -122,8 +123,9 @@ def test_probe_samples_deterministically_caches_and_reports_blocking(tmp_path: P
     assert all(s.status == "ok" and s.quotes == 2 for s in stats)
     again = quotes.probe(src, picked, 30, tmp_path)
     assert {s.status for s in again} == {"cached"} and src.request_count == 4
-    summary = quotes.summarize_probe(stats, total_candidates=100, minutes=30)
+    summary = quotes.summarize_probe(again, total_candidates=100, minutes=30)  # cached windows keep their cost
     assert summary["extrapolation_to_all_candidates"]["estimated_quotes"] == 200
+    assert summary["extrapolation_to_all_candidates"]["estimated_requests"] == 100
 
     blocked = quotes.probe(FakeQuotes(blocked=True), picked, 30, tmp_path / "b")
     assert [s.status for s in blocked] == ["entitlement_blocked", "skipped", "skipped", "skipped"]
