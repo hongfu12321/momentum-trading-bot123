@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "momentum-bot"
+version = "0.1.0"
+description = "Research-first small-cap momentum system. M1: Alpaca historical SIP vs IEX data feasibility (no orders)."
+requires-python = ">=3.12"
+# tzdata supplies the IANA database on Windows, where zoneinfo has no system source.
+dependencies = ["tzdata==2025.2"]
+
+[project.optional-dependencies]
+dev = ["pytest==8.3.4"]
+
+[project.scripts]
+momentum-bot = "momentum_bot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -m 'not network'"
+markers = ["network: opt-in tests that call the real Alpaca data API"]
