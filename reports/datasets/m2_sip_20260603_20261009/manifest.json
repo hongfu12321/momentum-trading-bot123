@@ -1,9 +1,9 @@
 {
   "milestone": "M1-B dataset",
   "status": "complete",
-  "created_at_utc": "2026-10-13T19:41:36.462791+00:00",
-  "as_of_utc": "2026-10-13T19:25:36.462791+00:00",
-  "code_sha": "bb9c7a4",
+  "created_at_utc": "2026-10-13T20:04:22.545725+00:00",
+  "as_of_utc": "2026-10-13T19:48:22.545725+00:00",
+  "code_sha": "e869a3c",
   "start_date": "2026-06-03",
   "end_date": "2026-10-09",
   "trading_days": [

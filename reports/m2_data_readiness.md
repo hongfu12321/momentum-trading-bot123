@@ -2,7 +2,7 @@
 
 **Dataset:** `reports/datasets/m2_sip_20260603_20261009/`. Only `report.md`, `manifest.json`, count-only `eligibility.csv` and the aggregate `quote_probe_summary.json` are committed. Per-symbol tables, raw bars, raw quotes, the asset snapshot and other input snapshots are licensed data and stay local (`.gitignore` allowlist).
 **Window:** 90 trading days, 2026-06-03 to 2026-10-09; premarket 04:00–09:30 ET and after-hours 16:00–20:00 ET
-**Code:** `bb9c7a4` · **API:** Alpaca market data plus one read-only paper `GET /v2/assets` lookup (1,874 requests on the first build, 0 on the cached rerun; 100 for the quote probe) · **Orders placed or cancelled:** 0
+**Code:** `e869a3c` · **API:** Alpaca market data plus one read-only paper `GET /v2/assets` lookup (1,874 requests on the first build, 0 on the cached rerun; 100 for the quote probe) · **Orders placed or cancelled:** 0
 **Reproduce:**
 
 ```
@@ -14,15 +14,16 @@ momentum-bot m2-quote-probe --dataset reports/datasets/m2_sip_20260603_20261009 
 
 ## Recommendation
 
-**Execution simulation can begin, on SIP bars plus SIP quotes, with in-sample days only.** Historical SIP quotes are available for every sampled extended-hours candidate window, and fetching them for all 4,187 candidates is affordable (about 7,000 requests, 1.5 hours and 4.7 GB of raw JSON before compression).
+**Execution simulation can begin, on SIP bars plus SIP quotes, with in-sample days only.** Historical SIP quotes are available for every sampled extended-hours candidate window, and fetching them for all 4,187 candidates is affordable (about 7,000 requests, 1.8 hours and 4.6 GB of raw JSON before compression).
 
 The simulator must handle these points before any result is reported:
 
-1. **Spreads are wide.** The median candidate window has a time-weighted spread of 100 bps in premarket and 111 bps after hours. Both are about twice the design's 50 bps cap. A strict cap would block most entries: the median window is within the cap only 18% of the time in premarket and 8% after hours. Whether to keep, raise or make the cap time-varying is a strategy decision. Make it on in-sample days only.
+1. **Spreads are wide.** Over fresh executable quotes, the median candidate window has a time-weighted spread of 96 bps in premarket and 108 bps after hours, about twice the design's 50 bps cap. A strict cap would block most entries. Counting only fresh (at most 3 s old), executable quotes, the median window is within the cap 9% of the time in premarket and 2.5% after hours. 7 of 30 premarket windows and 12 of 30 after-hours windows are never within it. Whether to keep, raise or make the cap time-varying is a strategy decision. Make it on in-sample days only.
 2. **Fills must come from quotes, not bar prices.** Buys should fill at the ask and sells at the bid, after a latency delay. Limit orders that the market never reaches are non-fills. Size must be capped by the displayed size at the time of the order.
-3. **Locked and crossed quotes occur.** Reg NMS lock/cross protections do not apply in extended hours. Crossed quotes are 0.3–0.4% of all quotes and locked quotes 2–3%. Treat a crossed quote as unusable. Treat a locked quote as having no spread advantage.
-4. **Quote gaps exist.** The median window's longest gap between quotes is 20 s (premarket) and 26 s (after hours), and the p90 is about 165 s. Stops and exits need a rule for a stale quote.
-5. **Fees:** Alpaca equity trades are commission-free, but sells pay SEC and FINRA TAF fees. Model them from the start.
+3. **Locked and crossed quotes occur.** Reg NMS lock/cross protections do not apply in extended hours. Crossed quotes are 0.2–0.4% of all quotes and locked quotes 2–4%. Both are excluded from executable spread eligibility and counted separately. The simulator must not fill against them.
+4. **Quotes go stale.** A quote at most 3 s old exists for a median 88% of each premarket window but only 66% of each after-hours window. The longest gap is 20 s and 26 s in the median window and about 170 s at p90. Entries need a fresh quote; stops and exits need a rule for when none exists.
+5. **Signal timing.** A breakout is known only when its 1-minute bar completes. Rows now carry `*_signal_available_utc` = bar start + 1 minute, events refuse an earlier observation time, and the quote probe starts its windows at signal availability. Simulated orders must arrive no earlier than signal availability plus order latency.
+6. **Fees:** Alpaca equity trades are commission-free, but sells pay SEC and FINRA TAF fees. Model them from the start.
 
 ## Findings
 
@@ -54,19 +55,22 @@ Every candidate, breakout, eligibility and quote-window row carries its `sample`
 
 ### 3. Historical SIP quote availability
 
-The probe used 60 SIP candidates (30 per session), sampled deterministically with seed 20261013, and fetched 30 minutes of SIP quotes after each trigger. After-hours windows were clipped at 20:00 ET.
+The probe used 60 SIP candidates (30 per session), sampled deterministically with seed 20261013, and fetched 30 minutes of SIP quotes starting when each trigger bar completed. After-hours windows were clipped at 20:00 ET. A quote is fresh for at most 3 s (`MAX_QUOTE_AGE_S`). Only executable quotes (two-sided, ask > bid) count toward spread eligibility; locked, crossed and one-sided quotes are reported separately.
 
 | | premarket | after-hours |
 |---|---:|---:|
 | Windows returned / requested | 30 / 30 | 30 / 30 |
 | Entitlement or other errors | 0 | 0 |
-| Quotes per window (median; p10–p90) | 7,224 (310–29,845) | 3,141 (252–22,752) |
+| Quotes per window (median; p10–p90) | 6,851 (283–28,392) | 3,030 (233–22,764) |
 | Minutes with at least one quote (median; p10) | 100%; 83% | 100%; 90% |
-| Median spread (median window; p10–p90) | 84 bps (35–185) | 89 bps (54–268) |
-| Time-weighted spread (median window; p10–p90) | 100 bps (41–163) | 111 bps (61–228) |
-| Time within 50 bps cap (median window; p90) | 18%; 64% | 8%; 38% |
-| Locked / crossed share of quotes | 3.3% / 0.44% | 2.2% / 0.33% |
-| Longest quote gap (median window; p90) | 20 s; 164 s | 26 s; 171 s |
+| Time with a fresh quote, any state (median; p10) | 88%; 15% | 66%; 16% |
+| Time with a fresh executable quote (median; p10) | 86%; 15% | 66%; 16% |
+| Median executable spread (median window; p10–p90) | 84 bps (28–147) | 88 bps (53–268) |
+| Time-weighted spread, fresh executable only (median window; p10–p90) | 96 bps (42–148) | 108 bps (60–252) |
+| Time with a fresh executable quote within 50 bps (median window; p90) | 9%; 65% | 2.5%; 36% |
+| Windows never within the cap | 7 | 12 |
+| Locked / crossed share of quotes (diagnostic) | 3.5% / 0.40% | 2.4% / 0.19% |
+| Longest quote gap (median window; p90) | 20 s; 170 s | 26 s; 171 s |
 
 Results are heavy-tailed and depend on the sample. The 30-day probe measured a 24% locked share in premarket, and most of that came from one symbol. Final numbers should come from the full candidate set.
 
