@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+CODE_PATHS = ("src", "pyproject.toml")  # generated reports in the repo do not make the code dirty
 
 
 def _from_git_dir(root: Path) -> str | None:
@@ -33,7 +34,7 @@ def _from_git_dir(root: Path) -> str | None:
 
 
 def code_version(root: Path = REPO_ROOT) -> str:
-    """Short commit SHA plus "-dirty" for uncommitted changes.
+    """Short commit SHA plus "-dirty" for uncommitted changes under CODE_PATHS.
 
     Without a git executable the SHA is read from .git and the suffix is "-dirty?" because the
     working tree cannot be checked. Returns "unknown" only when no repository is found.
@@ -41,7 +42,7 @@ def code_version(root: Path = REPO_ROOT) -> str:
     try:
         sha = subprocess.run(["git", "rev-parse", "--short=7", "HEAD"], cwd=root, capture_output=True, text=True, timeout=5)
         if sha.returncode == 0 and sha.stdout.strip():
-            status = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, timeout=5)
+            status = subprocess.run(["git", "status", "--porcelain", "--", *CODE_PATHS], cwd=root, capture_output=True, text=True, timeout=5)
             dirty = "-dirty" if status.returncode == 0 and status.stdout.strip() else ""
             return sha.stdout.strip() + dirty
     except (OSError, subprocess.SubprocessError):

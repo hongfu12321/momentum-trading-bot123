@@ -1,9 +1,9 @@
 {
   "milestone": "M1-B dataset",
   "status": "complete",
-  "created_at_utc": "2026-10-13T16:43:18.424988+00:00",
-  "as_of_utc": "2026-10-13T16:27:18.424988+00:00",
-  "code_sha": "e13dbb5-dirty",
+  "created_at_utc": "2026-10-13T17:11:47.697202+00:00",
+  "as_of_utc": "2026-10-13T16:55:47.697202+00:00",
+  "code_sha": "cb1f0a0-dirty",
   "start_date": "2026-08-28",
   "end_date": "2026-10-09",
   "trading_days": [
@@ -53,14 +53,13 @@
     "afterhours_min_change": 0.05,
     "min_session_volume": 100000,
     "breakout_volume_multiple": 2.0,
-    "breakout_lookback": 5
+    "breakout_lookback": 5,
+    "exclude_closing_auction_bar": true
   },
   "symbol_chunk": 1000,
   "inputs": {
-    "nasdaqlisted_downloaded_at_utc": "2026-10-13T16:43:18.424988+00:00",
     "nasdaqlisted_sha256": "ae20ca73e1b90d0351cdefac5ed21295a5908677be0615b7ad6cb13ad0d43de5",
     "nasdaqlisted_file_creation_time": "1013202612:11",
-    "otherlisted_downloaded_at_utc": "2026-10-13T16:43:18.424988+00:00",
     "otherlisted_sha256": "fb08aa6d0c841ac45032ff0811f29e2a530e4a09bb735be1bb206a4d4f5bcd44",
     "otherlisted_file_creation_time": "1013202612:11",
     "corporate_actions_range": [
@@ -79,7 +78,8 @@
     }
   },
   "failed_sessions": [],
-  "api_requests": 611,
+  "api_requests_this_run": 0,
+  "cached_fetches_reused": 121,
   "summary": {
     "universe_by_origin": {
       "current_listing": 5897,
@@ -141,41 +141,41 @@
       "iex_volume_share": 0.0004188513171803444,
       "candidates": {
         "both": 10,
-        "sip_only": 711,
+        "sip_only": 564,
         "iex_only": 0,
-        "sip_total": 721,
-        "iex_recall_of_sip": 0.013869625520110958
+        "sip_total": 574,
+        "iex_recall_of_sip": 0.017421602787456445
       },
       "gated_breakouts": {
         "both": 4,
-        "sip_only": 811,
+        "sip_only": 777,
         "iex_only": 0,
-        "sip_total": 815,
-        "iex_recall_of_sip": 0.0049079754601227
+        "sip_total": 781,
+        "iex_recall_of_sip": 0.005121638924455826
       },
-      "ungated_breakouts_sip": 3916,
-      "sip_candidates_non_current_origin": 16,
+      "ungated_breakouts_sip": 4302,
+      "sip_candidates_non_current_origin": 15,
       "sip_candidates_split_adjusted": 0,
       "sip_candidate_post_trigger_sip_coverage": {
-        "n": 721,
-        "median": 0.6695278969957081,
-        "p25": 0.30303030303030304,
-        "p75": 0.9577464788732394
+        "n": 574,
+        "median": 0.790444208789914,
+        "p25": 0.5260115606936416,
+        "p75": 0.9746835443037974
       },
       "sip_candidate_post_trigger_iex_coverage": {
-        "n": 721,
+        "n": 574,
         "median": 0.0,
         "p25": 0.0,
         "p75": 0.0
       },
       "sip_candidate_post_trigger_max_gap_minutes": {
-        "n": 721,
-        "median": 6.0,
-        "p25": 2.0,
-        "p75": 22.0
+        "n": 574,
+        "median": 4.0,
+        "p25": 1.0,
+        "p75": 10.0
       }
     }
   },
   "orders_placed": 0,
-  "candidate_rows": 1351
+  "candidate_rows": 1204
 }
