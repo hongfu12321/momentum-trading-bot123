@@ -4,7 +4,23 @@
 **Code:** `7f89c17` for both runs · **API:** Alpaca historical market data only: 1,608 quote requests in-sample and 906 out-of-sample, plus earlier cache warm-up · **Orders placed:** 0. There is no live or paper order path anywhere in the code.
 **Samples:** in-sample is 59 trading days, 2026-06-03 to 2026-08-26 (3,159 signals). One embargo day (2026-08-27) is excluded. Out-of-sample is 30 trading days, 2026-08-28 to 2026-10-09 (1,488 signals).
 
-## Result
+## Execution-model correction (rerun pending)
+
+**All figures below come from code `7f89c17`, which had two execution-model bugs. They are superseded and must be regenerated with the corrected code before this report is relied on.** The corrected model has not yet been run on the dataset: the licensed quote cache and Alpaca credentials were not available where the fix was made. The committed `backtest_summary_*.json` files are still the `7f89c17` outputs (their `code_sha` says so).
+
+1. **Incomplete exits were counted as realized P&L.** When an exit did not fully fill, the unsold shares were valued at the last executable bid, including bids after the exit deadline. That value was added to proceeds and reported through `net_usd` and `r_multiple`. Now:
+   - The exit order lives from trigger + latency to the end of its exit window: trigger + 2 minutes (`EXIT_SLACK`), never past the session close. Quotes after that time are not used for fills or valuation.
+   - Realized proceeds, gross and fees cover only shares actually sold (`exit_qty`). Unsold shares (`remaining_qty`) are marked at the last executable bid at or before the window end (`mark_price`, `unrealized_usd`) and are never realized.
+   - `net_usd` and `r_multiple` are set only for completed exits. Summary P&L, win rate, expectancy and the spread-cap selection count completed exits only (`trades`); `entries` counts all filled entries, and `incomplete_exits` reports count, shares unsold, realized and marked value separately.
+   - A position with unsold shares stays open: no new entry for the rest of that session, and its realized plus marked loss counts against the daily limits (the full entry value if it cannot be marked).
+   - Previously a stop-triggered exit could keep selling for up to about 17 minutes after the trigger; it now has 2 minutes. This can turn some previously complete exits into incomplete ones.
+2. **Displayed NBBO size was re-used.** Each quote update offered its full displayed size again, so an unchanged quote repeated three times could fill three times its size. Now an order may take at most displayed size × size share at a price level, minus what it already took at that level. Only a larger size at the same price (evidence of replenishment) or a new price level adds liquidity. Unfilled entry quantity still expires after the 10 s timeout.
+
+Expected effect: per order, fills can only be the same or smaller, so partial entries (2–5 per in-sample run before) and incomplete exits can only become more common. Aggregates are not monotonic, because one trade's change shifts which later signals pass the one-position and daily-loss rules. The pre-fix runs had no in-sample incomplete exits and one out-of-sample (marked at −$0.02 base, −$1.01 stress), so the realized-P&L bug barely moved the totals; the liquidity fix probably matters more, mainly for the stress case.
+
+Strategy and risk settings are unchanged. The out-of-sample rerun must use the frozen 50 bps cap, unless the corrected in-sample rerun selects a different cap under the pre-registered rule; that choice must be made from in-sample results only.
+
+## Result (pre-fix, `7f89c17`)
 
 **The strategy has no edge on this data.** Every configuration has negative average R, both in-sample and out-of-sample. Even the idealized upper bound (no latency, mid-price fills, unlimited size, no fees) is about −0.04 R in-sample and −0.06 R out-of-sample, and its confidence interval includes zero. Realistic execution makes it clearly negative.
 
@@ -32,12 +48,12 @@ The out-of-sample result is consistent with in-sample. It is not evidence of pro
   The signal becomes available when its 1-minute bar completes (`*_signal_available_utc`). Nothing earlier is used.
 - **Entry:** a marketable buy limit at the signal-time ask + 20 bps.
   - The quote at signal time must be fresh (≤ 3 s old), executable (ask > bid) and within the spread cap.
-  - The order arrives after latency. It fills only on fresh executable quotes, up to the displayed ask size.
+  - The order arrives after latency. It fills only on fresh executable quotes, up to the displayed ask size not already taken at that price (corrected model; see above).
   - Any unfilled remainder expires after 10 s.
   - A candle touching a price never counts as a fill.
 - **Exit:** stop at −3%, target at +2R (+6%), or a 15-minute time stop, flat 2 minutes before the session ends.
   - Exits trigger only on fresh executable bids.
-  - They sell at the bid after latency, up to the displayed bid size per quote, until filled.
+  - They sell at the bid after latency, up to the displayed bid size not already taken at that price, until filled or until the exit window ends (corrected model: trigger + 2 minutes, at most the session close). Unsold shares are reported as an incomplete exit, not as realized P&L.
 - **Risk** (docs/DESIGN.md section 5):
   - $3,000 account, $15 risk per trade, maximum notional 25%;
   - one position at a time, 5 entries per day;
@@ -159,7 +175,7 @@ About two-thirds of trades hit the 3% stop. Spread alone costs roughly 0.1–0.2
 - **Quote availability:** historical SIP quotes were present at signal time for 94% of evaluated in-sample signals and 93% out-of-sample. A missing quote within the 3 s before the signal (5.8% in-sample, 54 of 925; 7.1% out-of-sample, 31 of 436, base at 50 bps) is recorded as a non-fill. A fill is never synthesized from bars.
 - **Locked quotes:** a locked quote at signal time (1.3% and 1.8%) is a non-fill.
 - **Wide spreads:** this is the main rejection. At the 50 bps cap, 65% of evaluated in-sample signals and 63% out-of-sample were refused at signal time for spread above the cap.
-- **Incomplete exits:** none in-sample. Out-of-sample there was 1 in base and 1 in stress, the same trade. It reached its time exit with no fresh quote left in the fetched data, so it was marked at the last executable bid (−$0.02 and −$1.01).
+- **Incomplete exits:** none in-sample. Out-of-sample there was 1 in base and 1 in stress, the same trade. It reached its time exit with no fresh quote left in the fetched data, so it was marked at the last executable bid (−$0.02 and −$1.01). Under `7f89c17` that mark was included in net P&L and R; the corrected model reports it separately.
 
 Quote coverage is therefore not what limits the result. The wide spreads are.
 
@@ -173,7 +189,7 @@ After-hours results (12–22 trades) are too few to judge. The engine follows th
 
 ## Assumptions that may overstate execution quality
 
-1. **Displayed size is fully ours.** Every quote update offers its whole displayed size to us. Consecutive updates at the same price can re-offer the same shares, and there are no competing orders.
+1. **Displayed size is ours to take.** The corrected model no longer re-uses the same displayed shares, but it still assumes no competing orders take them first and that a size increase is new liquidity available to us. Historical Level 1 NBBO cannot prove an order would have filled: it shows no queue position, hidden or odd-lot liquidity, or who traded the displayed size. (In the pre-fix `7f89c17` runs, consecutive updates at the same price re-offered the same shares.)
 2. **Short latency.** The base case acts 0.5 s after the bar ends. A live system must first receive the bar, which arrives after the minute closes. It must then scan thousands of symbols and route the order. The stress case's 2 s is probably closer to reality.
 3. **Stops fill at the bid prevailing when the order arrives.** In fast drops, a real stop can fill well below the bid it triggered on, and the bid-size limit only partly captures this.
 4. **No halts, venue-specific extended-hours rules or broker rejections.** Alpaca is assumed to accept extended-hours limit orders from 04:00 ET.
@@ -183,6 +199,8 @@ After-hours results (12–22 trades) are too few to judge. The engine follows th
 Assumptions that understate execution quality: no price improvement, no hidden or midpoint liquidity, odd lots ignored (the SIP NBBO is round lots), and locked quotes never fill.
 
 ## Reproduce
+
+Rerun both commands below with the corrected code to replace the pre-fix figures. The out-of-sample run is a re-evaluation of the same frozen configuration under a corrected execution model, not a new parameter search.
 
 ```bash
 momentum-bot m1-dataset --start 2026-06-03 --end 2026-10-09 --out-dir reports/datasets/m2_sip_20260603_20261009

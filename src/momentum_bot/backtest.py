@@ -7,9 +7,18 @@ order. Entries and exits are simulated against historical SIP NBBO quotes:
   simulated order reaches the market at ``available_utc + latency``; no fill can happen earlier.
 - Orders fill only against fresh (age <= max_quote_age_s), executable (ask > bid) quotes. Locked,
   crossed, one-sided and stale quotes never fill. Entries also require spread <= cap.
-- Buys are marketable limits at the signal-time ask plus an offset, capped at the displayed ask
-  size per quote; whatever is unfilled when the entry timeout ends expires (a non-fill or
-  partial fill). Exits sell at the bid, up to the displayed bid size per quote, until filled.
+- Buys are marketable limits at the signal-time ask plus an offset; whatever is unfilled when the
+  entry timeout ends expires (a non-fill or partial fill). Exits sell at the bid until filled or
+  until the exit window (trigger + EXIT_SLACK, never past the session close) ends.
+- Displayed size is consumed, not re-used: an order may take at most (displayed size x size_share)
+  at a price level, minus what it already took at that level. A repeated identical quote adds
+  nothing; only a larger size at the same price (evidence of replenishment) or a new price level
+  adds liquidity. Historical Level 1 NBBO cannot show queue position, hidden or odd-lot
+  liquidity, or who else traded the displayed size, so even this rule may overstate fills.
+- An exit that is not fully filled by the end of its window is an incomplete exit: realized
+  proceeds and fees cover only the shares actually sold; the unsold remainder is marked at the
+  last executable bid at or before the window end and reported separately (``unrealized_usd``),
+  never as realized P&L. ``net_usd`` and ``r_multiple`` are set only for completed exits.
 - Costs: the spread (fills at the touch), adverse slippage in the stress case, SEC and FINRA TAF
   fees on sells. Alpaca equity commissions are zero.
 
@@ -151,13 +160,19 @@ class Trade:
     seconds_to_fill: float
     exit_reason: str
     exit_trigger_utc: str
-    exit_last_fill_utc: str
-    exit_price: float
+    exit_last_fill_utc: str  # last sell fill; the exit window end when nothing sold
+    exit_qty: int  # shares actually sold
+    remaining_qty: int  # shares still held when the exit window ended
+    exit_price: float  # average realized sale price of exit_qty; nan when nothing sold
     exit_complete: bool
-    gross_usd: float
-    fees_usd: float
-    net_usd: float
-    r_multiple: float
+    gross_usd: float  # realized: sale proceeds - entry cost of exit_qty
+    fees_usd: float  # on shares actually sold
+    realized_net_usd: float
+    mark_utc: str  # valuation time of the unsold remainder (exit window end); "" when complete
+    mark_price: float  # last executable bid at or before mark_utc; nan when complete or unknown
+    unrealized_usd: float  # (mark_price - entry_price) * remaining_qty; 0 when complete
+    net_usd: float | None  # realized_net_usd for completed exits only
+    r_multiple: float | None  # completed exits only
 
 
 @dataclass(slots=True)
@@ -229,11 +244,14 @@ def _prevailing(quotes: list[Quote], times: list[datetime], t: datetime) -> Quot
 def _execute(quotes: list[Quote], times: list[datetime], side: str, qty: int, arrive: datetime,
              until: datetime | None, cfg: ExecConfig, limit: float | None, *, check_spread: bool,
              ) -> tuple[list[tuple[datetime, float, int]], Counter[str]]:
-    """Walk the quote stream from order arrival; fills never happen before ``arrive``."""
+    """Walk the quote stream from order arrival to ``until`` (inclusive); fills never happen before
+    ``arrive``. Displayed size is consumed: at each price level the order takes at most
+    floor(displayed size x size_share) minus what it already took at that level (module docstring)."""
     i = bisect.bisect_right(times, arrive) - 1
     points = ([(arrive, quotes[i])] if i >= 0 else []) + [(q.t, q) for q in quotes[i + 1:]]
     fills: list[tuple[datetime, float, int]] = []
     misses: Counter[str] = Counter()
+    taken: Counter[float] = Counter()  # shares taken per displayed price level over the order's life
     left = qty
     for at, q in points:
         if until is not None and at > until:
@@ -245,13 +263,14 @@ def _execute(quotes: list[Quote], times: list[datetime], side: str, qty: int, ar
         if reason:
             misses[reason] += 1
             continue
-        shown = q.ask_size if side == "buy" else q.bid_size
-        n = left if cfg.size_share is None else min(left, int(shown * cfg.size_share))
+        level, shown = (q.ask, q.ask_size) if side == "buy" else (q.bid, q.bid_size)
+        n = left if cfg.size_share is None else min(left, int(shown * cfg.size_share) - taken[level])
         if n <= 0:
-            misses["no_displayed_size"] += 1
+            misses["no_displayed_size" if shown <= 0 else "displayed_size_consumed"] += 1
             continue
         assert at >= arrive
         fills.append((at, px, n))
+        taken[level] += n
         left -= n
         if left == 0:
             break
@@ -307,22 +326,27 @@ def simulate_signal(sig: Signal, quotes_entry: list[Quote], hold: Callable[[], l
             if q.bid >= target:
                 trigger, why = q.t, "target"
                 break
-    sells, _ = _execute(quotes, times, "sell", filled, trigger + cfg.latency, None, cfg, None, check_spread=False)
+    exit_until = min(trigger + EXIT_SLACK, close)  # exit window end and valuation deadline
+    sells, _ = _execute(quotes, times, "sell", filled, trigger + cfg.latency, exit_until, cfg, None,
+                        check_spread=False)
     sold = sum(n for _, _, n in sells)
     proceeds = sum(px * n for _, px, n in sells)
-    complete = sold == filled
-    if not complete:  # missed exit: mark the remainder at the last executable bid known, else at the stop
-        last = [q for q in quotes if q.state == EXECUTABLE]
-        mark = _price(last[-1], "sell", cfg) if last else stop
-        proceeds += mark * (filled - sold)
-    exit_px = proceeds / filled
-    fees = _fees(proceeds, filled, cfg)
-    gross = proceeds - entry * filled
+    remaining = filled - sold
+    complete = remaining == 0
+    fees = _fees(proceeds, sold, cfg)
+    gross = proceeds - entry * sold
+    mark_px, mark_at = math.nan, ""
+    if not complete:  # unsold remainder: marked, never realized; nothing after exit_until is used
+        known = [q for q in quotes if q.t <= exit_until and q.state == EXECUTABLE]
+        mark_px, mark_at = (_price(known[-1], "sell", cfg) if known else math.nan), exit_until.isoformat()
+    net = gross - fees
     return Trade(sig.symbol, sig.trading_date.isoformat(), sig.session, sig.sample, cfg.name,
                  sig.bar_start_utc.isoformat(), sig.available_utc.isoformat(), sig.price, q0.spread_bps, qty, filled,
                  first_fill.isoformat(), entry, (first_fill - sig.available_utc).total_seconds(), why,
-                 trigger.isoformat(), (sells[-1][0] if sells else trigger).isoformat(), exit_px, complete,
-                 gross, fees, gross - fees, (gross - fees) / (entry * strat.stop_pct * filled))
+                 trigger.isoformat(), (sells[-1][0] if sells else exit_until).isoformat(), sold, remaining,
+                 proceeds / sold if sold else math.nan, complete, gross, fees, net, mark_at, mark_px,
+                 (mark_px - entry) * remaining if remaining else 0.0,
+                 net if complete else None, net / (entry * strat.stop_pct * filled) if complete else None)
 
 
 @dataclass(slots=True)
@@ -363,10 +387,15 @@ def run_backtest(signals: Iterable[Signal], store: QuoteStore, cfg: ExecConfig, 
             continue
         out.trades.append(res)
         out.attempts.append(Attempt(**base, outcome="filled" if res.qty == res.requested_qty else "partial"))
-        busy_until = datetime.fromisoformat(res.exit_last_fill_utc)
+        pnl = res.realized_net_usd
+        if res.exit_complete:
+            busy_until = datetime.fromisoformat(res.exit_last_fill_utc)
+        else:  # shares still held: no new entry this session; the remainder counts against the limits
+            busy_until = session_windows(sig.trading_date)[sig.session].end_utc
+            pnl += res.unrealized_usd if not math.isnan(res.unrealized_usd) else -res.entry_price * res.remaining_qty
         day.entries += 1
-        day.net += res.net_usd
-        day.losses_in_row = day.losses_in_row + 1 if res.net_usd < 0 else 0
+        day.net += pnl
+        day.losses_in_row = day.losses_in_row + 1 if pnl < 0 else 0
     return out
 
 
@@ -418,10 +447,12 @@ def _bootstrap_ci(values: list[float], seed: int = 0, n: int = 2000) -> tuple[fl
 def summarize(result: BacktestResult) -> dict[str, object]:
     out: dict[str, object] = {}
     for session in ("premarket", "afterhours", "all"):
-        tr = [t for t in result.trades if session in ("all", t.session)]
+        entered = [t for t in result.trades if session in ("all", t.session)]
+        tr = [t for t in entered if t.exit_complete]  # P&L statistics cover completed exits only
+        open_ = [t for t in entered if not t.exit_complete]
         at = [a for a in result.attempts if session in ("all", a.session)]
         tried = [a for a in at if a.outcome != "skipped"]
-        nets = [t.net_usd for t in tr]
+        nets = [t.realized_net_usd for t in tr]
         wins, losses = [x for x in nets if x > 0], [x for x in nets if x <= 0]
         equity = peak = drawdown = 0.0
         for x in nets:
@@ -433,26 +464,35 @@ def summarize(result: BacktestResult) -> dict[str, object]:
             "skipped": dict(Counter(a.reason for a in at if a.outcome == "skipped")),
             "orders_simulated": len(tried),
             "non_fills": dict(Counter(a.reason for a in tried if a.outcome == "non_fill")),
-            "fill_rate": len(tr) / len(tried) if tried else None,
+            "fill_rate": len(entered) / len(tried) if tried else None,
             "partial_fills": sum(1 for a in tried if a.outcome == "partial"),
-            "median_seconds_to_fill": median(t.seconds_to_fill for t in tr) if tr else None,
-            "median_entry_spread_bps": median(t.signal_spread_bps for t in tr) if tr else None,
-            "median_entry_vs_signal_close_bps": median((t.entry_price / t.signal_price - 1) * 1e4 for t in tr
-                                                       if t.signal_price == t.signal_price) if tr else None,
+            "median_seconds_to_fill": median(t.seconds_to_fill for t in entered) if entered else None,
+            "median_entry_spread_bps": median(t.signal_spread_bps for t in entered) if entered else None,
+            "median_entry_vs_signal_close_bps": median((t.entry_price / t.signal_price - 1) * 1e4 for t in entered
+                                                       if t.signal_price == t.signal_price) if entered else None,
+            "entries": len(entered),
             "trades": len(tr),
             "win_rate": len(wins) / len(tr) if tr else None,
             "gross_usd": sum(t.gross_usd for t in tr),
             "fees_usd": sum(t.fees_usd for t in tr),
             "net_usd": sum(nets),
             "expectancy_usd": fmean(nets) if tr else None,
-            "expectancy_r": fmean(t.r_multiple for t in tr) if tr else None,
-            "expectancy_r_ci95_bootstrap": _bootstrap_ci([t.r_multiple for t in tr]),
+            "expectancy_r": fmean(t.r_multiple for t in tr) if tr else None,  # type: ignore[misc]
+            "expectancy_r_ci95_bootstrap": _bootstrap_ci([t.r_multiple for t in tr]),  # type: ignore[misc]
             "profit_factor": sum(wins) / -sum(losses) if losses and sum(losses) < 0 else None,
             "avg_win_usd": fmean(wins) if wins else None,
             "avg_loss_usd": fmean(losses) if losses else None,
             "max_drawdown_usd": drawdown,
             "exit_reasons": dict(Counter(t.exit_reason for t in tr)),
-            "incomplete_exits": sum(1 for t in tr if not t.exit_complete),
+            # Positions not fully exited by the end of their exit window; excluded from the P&L above.
+            "incomplete_exits": {
+                "count": len(open_),
+                "no_shares_sold": sum(1 for t in open_ if t.exit_qty == 0),
+                "shares_unsold": sum(t.remaining_qty for t in open_),
+                "realized_net_usd": sum(t.realized_net_usd for t in open_),
+                "unrealized_mark_usd": sum(t.unrealized_usd for t in open_ if not math.isnan(t.mark_price)),
+                "unmarked": sum(1 for t in open_ if math.isnan(t.mark_price)),
+            },
         }
     return out
 

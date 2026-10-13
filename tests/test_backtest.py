@@ -1,9 +1,10 @@
+import math
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
 from momentum_bot.backtest import (
-    SCENARIOS, Attempt, Quote, RiskConfig, Signal, StrategyConfig, Trade, run_backtest, signals_from_breakouts, simulate_signal,
+    EXIT_SLACK, SCENARIOS, Attempt, Quote, RiskConfig, Signal, StrategyConfig, Trade, run_backtest, signals_from_breakouts, simulate_signal,
     summarize,
 )
 
@@ -160,3 +161,104 @@ def test_spread_cap_variants_and_in_sample_selection_rule() -> None:
            "base_cap150": {"all": {"trades": 60, "expectancy_r": -0.1}}}
     assert select_spread_cap(res, [50, 100, 150])["selected_spread_cap_bps"] == 100  # tie goes to the tighter cap
     assert select_spread_cap({}, [50])["selected_spread_cap_bps"] is None
+
+
+# --- Regression: incomplete exits are never reported as realized P&L --------------------------------
+
+def bq(sec: float, bid: float, bid_size: int, base: datetime = AVAIL) -> Quote:
+    return Quote(base + timedelta(seconds=sec), bid, bid + 0.01, bid_size, 10_000)
+
+
+ENTRY = [qt(-1, 5.00, 5.01, size=100)]  # 99 shares at 5.01
+
+
+def test_partial_exit_separates_realized_from_marked_value() -> None:
+    # Stop at +60s with 40 shares bid; repeated identical bids add no liquidity, so 59 shares stay unsold.
+    t = run(ENTRY, hold=[bq(60, 4.80, 40), bq(61, 4.80, 40), bq(62, 4.80, 40)])
+    assert isinstance(t, Trade) and t.exit_reason == "stop"
+    assert (t.qty, t.exit_qty, t.remaining_qty, t.exit_complete) == (99, 40, 59, False)
+    assert t.exit_price == 4.80
+    assert t.gross_usd == pytest.approx((4.80 - 5.01) * 40)
+    assert t.fees_usd == pytest.approx(4.80 * 40 * 27.80e-6 + 40 * 0.000166)  # sold shares only
+    assert t.realized_net_usd == pytest.approx(t.gross_usd - t.fees_usd)
+    assert t.mark_price == 4.80 and t.unrealized_usd == pytest.approx((4.80 - 5.01) * 59)
+    assert t.net_usd is None and t.r_multiple is None  # cannot be mistaken for a completed trade
+
+
+def test_no_exit_liquidity_sells_nothing() -> None:
+    t = run(ENTRY, hold=[bq(60, 4.80, 0)])
+    assert (t.exit_qty, t.remaining_qty, t.exit_complete) == (0, 99, False)
+    assert math.isnan(t.exit_price) and t.gross_usd == 0 and t.fees_usd == 0 and t.realized_net_usd == 0
+    trigger = datetime.fromisoformat(t.exit_trigger_utc)
+    assert t.exit_last_fill_utc == t.mark_utc == (trigger + EXIT_SLACK).isoformat()
+    assert t.unrealized_usd == pytest.approx((4.80 - 5.01) * 99) and t.net_usd is None
+
+
+def test_exit_window_end_is_inclusive_and_later_quotes_are_never_used() -> None:
+    end = 60 + EXIT_SLACK.total_seconds()  # stop triggers at +60s; the exit window ends 2 minutes later
+    at_end = run(ENTRY, hold=[bq(60, 4.80, 40), bq(end, 4.70, 100)])
+    assert at_end.exit_complete and at_end.exit_qty == 99 and at_end.net_usd is not None
+    after = run(ENTRY, hold=[bq(60, 4.80, 40), bq(end + 0.001, 4.90, 10_000)])
+    assert not after.exit_complete and after.exit_qty == 40
+    assert after.mark_price == 4.80  # the 4.90 bid after the valuation deadline is ignored
+
+
+def test_time_exit_boundary_and_session_end_valuation() -> None:
+    # A stop-level bid exactly at the holding deadline does not trigger a stop; the time exit sells into it.
+    t = run(ENTRY, hold=[bq(15 * 60 + 0.5, 4.00, 10_000)])
+    assert t.exit_reason == "time" and t.exit_price == 4.00 and t.exit_complete
+    # Near the close the exit window ends at the session close (14:30 UTC); nothing after it is used.
+    late = BAR.replace(hour=14, minute=15)
+    s, a = sig(bar=late), late + timedelta(minutes=1)
+    close = datetime(2024, 3, 8, 14, 30, tzinfo=timezone.utc)
+    t = run([qt(-1, 5.00, 5.01, size=100, base=a)], s=s,
+            hold=[bq(11 * 60, 5.00, 0, base=a), Quote(close + timedelta(seconds=1), 5.5, 5.51, 10_000, 10_000)])
+    assert t.exit_reason == "session_end" and t.exit_qty == 0
+    assert t.mark_utc == close.isoformat() and t.mark_price == 5.00
+
+
+def test_incomplete_exit_holds_position_for_the_session_and_is_summarized_apart() -> None:
+    b2 = BAR + timedelta(minutes=30)  # after AAA's exit window, but AAA still holds shares
+    store = FakeStore({"AAA": ENTRY + [bq(60, 4.80, 40)],
+                       "BBB": [qt(-1, 5.00, 5.01, base=b2 + timedelta(minutes=1))]})
+    res = run_backtest([sig("AAA"), sig("BBB", b2)], store, BASE)
+    assert [a.reason for a in res.attempts if a.symbol == "BBB"] == ["position_open"]
+    s = summarize(res)["all"]
+    assert (s["entries"], s["trades"], s["net_usd"], s["expectancy_r"]) == (1, 0, 0, None)
+    inc = s["incomplete_exits"]
+    assert (inc["count"], inc["shares_unsold"], inc["unmarked"]) == (1, 59, 0)
+    assert inc["unrealized_mark_usd"] == pytest.approx((4.80 - 5.01) * 59)
+
+
+# --- Regression: displayed NBBO size is consumed, never re-used ------------------------------------
+
+def test_repeated_identical_quotes_do_not_refill() -> None:
+    t = run([qt(-1, 5.00, 5.01, size=30), qt(1, 5.00, 5.01, size=30), qt(2, 5.00, 5.01, size=30)],
+            hold=[qt(60, 5.32, 5.33)])
+    assert (t.requested_qty, t.qty) == (99, 30)  # previously 90: the same 30 shares counted three times
+
+
+def test_quote_size_changes_and_price_levels() -> None:
+    quotes = [qt(-1, 5.00, 5.01, size=30),
+              qt(1, 5.00, 5.01, size=50),   # +20 shown at the same price: replenishment evidence
+              qt(2, 5.00, 5.01, size=20),   # shrank: nothing new
+              qt(3, 5.01, 5.02, size=30),   # new price level, inside the 5.02002 limit
+              qt(4, 5.00, 5.01, size=50)]   # back to 5.01: its 50 were already taken
+    t = run(quotes, hold=[qt(60, 5.32, 5.33)])
+    assert t.qty == 80 and t.entry_price == pytest.approx((5.01 * 50 + 5.02 * 30) / 80)
+
+
+def test_size_share_caps_cumulative_take_per_level() -> None:
+    stress = SCENARIOS["stress"]  # 2 s latency, half of displayed size
+    quotes = [qt(1.5, 5.00, 5.01, size=100), qt(2.5, 5.00, 5.01, size=100), qt(3, 5.00, 5.01, size=100)]
+    t = run([qt(-1, 5.00, 5.01, size=100)] + quotes, hold=[qt(60, 5.40, 5.41)], cfg=stress)
+    assert t.qty == 50
+
+
+def test_entry_timeout_is_inclusive_and_later_liquidity_is_not_used() -> None:
+    expiry = BASE.latency.total_seconds() + BASE.entry_timeout.total_seconds()
+    at = run([qt(-1, 5.00, 5.01, size=30), qt(expiry, 5.00, 5.01, size=1_000)], hold=[qt(60, 5.32, 5.33)])
+    assert at.qty == 99
+    late = run([qt(-1, 5.00, 5.01, size=30), qt(expiry + 0.001, 5.00, 5.01, size=1_000)],
+               hold=[qt(60, 5.32, 5.33)])
+    assert late.qty == 30  # the remainder expired; a partial fill
