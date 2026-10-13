@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -74,9 +75,14 @@ def test_no_trading_days() -> None:
 
 def test_source_has_no_order_or_trading_endpoints() -> None:
     src = Path(__file__).parents[1] / "src"
-    text = "\n".join(p.read_text(encoding="utf-8") for p in src.rglob("*.py")).lower()
-    for forbidden in ("/v2/orders", "submit_order", "paper-api.alpaca.markets\"", "api.alpaca.markets/v2"):
-        assert forbidden not in text
+    files = {p.name: p.read_text(encoding="utf-8").lower() for p in src.rglob("*.py")}
+    text = "\n".join(files.values())
+    for forbidden in ("/v2/orders", "/v2/positions", "/v2/account", "submit_order", "cancel", "https://api.alpaca.markets",
+                      'method="post"', 'method="delete"', 'method="patch"', 'method="put"'):
+        assert forbidden not in text, forbidden
+    # The paper trading host appears only in the read-only assets module, which exposes only /v2/assets.
+    assert [n for n, t in files.items() if "paper-api.alpaca.markets" in t] == ["alpaca_assets.py"]
+    assert set(re.findall(r"/v2/\w+", files["alpaca_assets.py"])) == {"/v2/assets"}
 
 
 def test_closing_auction_bar_volume_excluded_from_afterhours_gate() -> None:

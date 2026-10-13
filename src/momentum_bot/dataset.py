@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
+from typing import Literal, Protocol
 
 from .compare import Event, ScanParams, match_events, scan_session, summarize_matches
 from .data.alpaca_historical import AlpacaHistoricalProvider
@@ -28,8 +29,10 @@ from .data.coverage import missing_intervals
 from .data.market_calendar import ET, EXTENDED_SESSIONS, PREMARKET, SessionWindow, previous_trading_day, session_windows, trading_days
 from .data.normalize import normalize
 from .data.provider import AuthenticationError, Bar, BarsRequest, EntitlementError, ProviderError
+from .split import EMBARGO, IN_SAMPLE, OUT_OF_SAMPLE, chronological_split
 from .universe import (
     CORPORATE_ACTION_TYPES,
+    ORIGIN_RANK,
     DIRECTORY_FILES,
     DIRECTORY_URL,
     Universe,
@@ -40,7 +43,12 @@ from .universe import (
 
 FEEDS = ("sip", "iex")
 BAR_FIELDS = ("symbol", "t", "o", "h", "l", "c", "v", "n", "vw")
+DUPLICATE_MIN_VOLUME = 1000  # identical daily OHLCV above this is the same series under two symbols
 FetchText = Callable[[str], str]
+
+
+class AssetsReader(Protocol):
+    def list_assets(self, status: Literal["active", "inactive"]) -> list[dict]: ...
 
 
 class FeedBlocked(Exception):
@@ -55,6 +63,8 @@ class DatasetConfig:
     symbol_chunk: int = 1000
     delay: timedelta = timedelta(minutes=16)
     bucket_minutes: int = 30
+    oos_fraction: float = 1 / 3
+    embargo_days: int = 1
 
 
 @dataclass(slots=True)
@@ -74,6 +84,21 @@ def urllib_fetch_text(url: str) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "momentum-bot-research"})
     with urllib.request.urlopen(req, timeout=60) as resp:
         return resp.read().decode("utf-8")
+
+
+def load_assets(inputs_dir: Path, reader: AssetsReader | None, now: datetime) -> tuple[list[dict], dict[str, object]]:
+    """Saved /v2/assets snapshot (active + inactive), downloaded once with the read-only paper reader."""
+    path = inputs_dir / "alpaca_assets.json"
+    if not path.is_file():
+        if reader is None:
+            return [], {"alpaca_assets": "not used"}
+        rows = reader.list_assets("active") + reader.list_assets("inactive")
+        path.write_text(json.dumps({"downloaded_at_utc": now.isoformat(), "assets": rows}, sort_keys=True),
+                        encoding="utf-8")
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    counts = Counter(str(a.get("status")) for a in saved["assets"])
+    return saved["assets"], {"alpaca_assets_downloaded_at_utc": saved["downloaded_at_utc"],
+                             "alpaca_assets_sha256": _sha(path.read_bytes()), "alpaca_assets_counts": dict(counts)}
 
 
 def load_inputs(
@@ -197,6 +222,7 @@ def build_dataset(
     now_utc: datetime | None = None,
     fetch_text: FetchText = urllib_fetch_text,
     code_sha: str = "unknown",
+    assets_reader: AssetsReader | None = None,
 ) -> DatasetResult:
     now_utc = now_utc or datetime.now(timezone.utc)
     days = trading_days(cfg.start, cfg.end)
@@ -210,7 +236,10 @@ def build_dataset(
 
     texts, actions, input_meta = load_inputs(out_dir / "inputs", provider, fetch_text, first,
                                              now_utc.astimezone(ET).date(), now_utc)
-    universe = build_universe(parse_directory(texts["nasdaqlisted"], texts["otherlisted"]), actions, first)
+    assets, assets_meta = load_assets(out_dir / "inputs", assets_reader, now_utc)
+    input_meta.update(assets_meta)
+    universe = build_universe(parse_directory(texts["nasdaqlisted"], texts["otherlisted"]), actions, first, assets)
+    chrono = chronological_split(days, cfg.oos_fraction, cfg.embargo_days)
     all_syms = sorted(universe.origin)
     fetcher = _Fetcher(provider, out_dir / "cache", cfg.symbol_chunk)
     p = cfg.params
@@ -226,7 +255,23 @@ def build_dataset(
         daily_bars = fetcher.bars("daily", all_syms, "sip", day0, day1, timeframe="1Day")
         if daily_bars is None:
             raise FeedBlocked("daily reference bars could not be fetched")
-        daily = {(b.symbol, b.timestamp_utc.astimezone(ET).date()): b for b in daily_bars}
+        # Keep only what is needed (close, and OHLCV for duplicate detection) so long windows stay small.
+        ohlcv = {(b.symbol, b.timestamp_utc.astimezone(ET).date()): (b.open, b.high, b.low, b.close, b.volume)
+                 for b in daily_bars}
+        del daily_bars
+        daily = {k: v[3] for k, v in ohlcv.items()}
+
+        # Same series under two symbols (a rename missing from corporate actions): keep the higher-precedence one.
+        same: dict[tuple, list[str]] = defaultdict(list)
+        for (sym, d), bar_values in ohlcv.items():
+            if bar_values[4] >= DUPLICATE_MIN_VOLUME:
+                same[(d, *bar_values)].append(sym)
+        del ohlcv
+        same_by_date: dict[date, list[list[str]]] = defaultdict(list)
+        for (d, *_), syms in sorted(same.items()):
+            if len(syms) > 1:
+                same_by_date[d].append(sorted(syms))
+        del same
 
         for (sym, ex), split in sorted(universe.splits.items()):
             if first < ex <= days[-1]:
@@ -234,13 +279,26 @@ def build_dataset(
                 tables["split_checks"].append({
                     "symbol": sym, "ex_date": ex.isoformat(), "old_rate": split.old_rate, "new_rate": split.new_rate,
                     "expected_price_factor": split.price_factor,
-                    "raw_close_before": before.close if before else None, "raw_close_on_ex": after.close if after else None,
-                    "observed_factor": after.close / before.close if before and after else None,
+                    "raw_close_before": before, "raw_close_on_ex": after,
+                    "observed_factor": after / before if before and after else None,
                 })
 
         for d in days:
             windows = session_windows(d)
-            todays = universe.symbols_for(d)
+            # Only symbols the rename/delisting rules leave visible are compared, so a known rename
+            # pair is never dropped twice. Either the session day or the reference day can expose it.
+            visible = universe.symbols_for(d)
+            vis, hidden = set(visible), set()
+            for dx in (prev_day[d], d):
+                for group in same_by_date.get(dx, []):
+                    g = [s for s in group if s in vis]
+                    if len(g) > 1:
+                        keep = min(g, key=lambda s: (universe.rank(s), s))
+                        hidden |= set(g) - {keep}
+                        tables["duplicate_series"].append({"trading_date": d.isoformat(), "detected_on": dx.isoformat(),
+                                                           "kept": keep, "dropped": ",".join(sorted(set(g) - {keep}))})
+            todays = [s for s in visible if s not in hidden]
+            sample = chrono.sample_of(d)
             for session in EXTENDED_SESSIONS:
                 w = windows[session]
                 min_change = p.premarket_min_change if session == PREMARKET else p.afterhours_min_change
@@ -248,21 +306,21 @@ def build_dataset(
                 refs: dict[str, float] = {}
                 raw_refs: dict[str, float] = {}
                 for sym in todays:
-                    db = daily.get((sym, prev_day[d] if session == PREMARKET else d))
-                    if db is None or db.close <= 0:
+                    close = daily.get((sym, prev_day[d] if session == PREMARKET else d))
+                    if close is None or close <= 0:
                         continue
                     split = universe.splits.get((sym, d)) if session == PREMARKET else None
-                    ref = db.close * (split.price_factor if split else 1.0)
+                    ref = close * (split.price_factor if split else 1.0)
                     if ref <= cap:
                         refs[sym] = ref
                         if split:
-                            raw_refs[sym] = db.close
+                            raw_refs[sym] = close
                 eligible = sorted(refs)
                 origin_counts = Counter(universe.origin[s].split(":")[0] for s in eligible)
                 tables["eligibility"].append({
-                    "trading_date": d.isoformat(), "session": session, "universe_symbols": len(todays),
-                    "eligible": len(eligible), "eligible_current_listing": origin_counts["current_listing"],
-                    "eligible_delisted": origin_counts["delisted"], "eligible_renamed": origin_counts["renamed_to"],
+                    "trading_date": d.isoformat(), "session": session, "sample": sample,
+                    "universe_symbols": len(todays), "duplicate_series_hidden": len(hidden), "eligible": len(eligible),
+                    **{f"eligible_{k}": origin_counts[k] for k in ORIGIN_RANK},
                     "split_adjusted_refs": len(raw_refs),
                 })
                 label = f"{d.isoformat()}_{session}"
@@ -309,7 +367,7 @@ def build_dataset(
                     trigger = found["sip"] or found["iex"]
                     if trigger is None:
                         continue
-                    row = {"symbol": sym, "trading_date": d.isoformat(), "session": session,
+                    row = {"symbol": sym, "trading_date": d.isoformat(), "session": session, "sample": sample,
                            "origin": universe.origin[sym], "reference_close": refs[sym],
                            "split_adjusted": sym in raw_refs, "sip_candidate": bool(found["sip"]),
                            "iex_candidate": bool(found["iex"]), "trigger_feed": trigger.feed,
@@ -331,6 +389,8 @@ def build_dataset(
     cand_matches = match_events(events["sip"]["candidate"], events["iex"]["candidate"], by_minute=False)
     gated = match_events([e for e in events["sip"]["breakout"] if e.candidate_gate],
                          [e for e in events["iex"]["breakout"] if e.candidate_gate], by_minute=True)
+    for row in (*cand_matches, *gated):
+        row["sample"] = chrono.sample_of(date.fromisoformat(str(row["trading_date"])))
     tables["candidate_matches"] = cand_matches
     tables["breakout_matches"] = gated
     tables["candidates"] = [e.row() for f in FEEDS for e in events[f]["candidate"]]
@@ -349,6 +409,9 @@ def build_dataset(
         "reference_day": first.isoformat(), "feeds": list(FEEDS), "timeframe": "1Min", "adjustment": "raw",
         "reference_close": "SIP 1Day bar close (regular-session official close), split-adjusted on ex-dates",
         "scan_params": asdict(p), "symbol_chunk": cfg.symbol_chunk, "inputs": input_meta,
+        "chronological_split": {"oos_fraction": cfg.oos_fraction, "embargo_days": cfg.embargo_days,
+                                **chrono.describe()},
+        "profitability": "not evaluated: no transaction costs, spreads or non-fills are modelled yet",
         "failed_sessions": failed_sessions, "api_requests_this_run": provider.request_count,
         "cached_fetches_reused": sum(1 for r in fetcher.log if r["status"] == "cached"),
         "summary": summary, "orders_placed": 0,
@@ -388,6 +451,13 @@ def _summarize(tables, cand_matches, gated, events, universe: Universe, sessions
             "gated_breakouts": summarize_matches(gm),
             "ungated_breakouts_sip": sum(1 for e in events["sip"]["breakout"] if e.session == s),
             "sip_candidates_non_current_origin": sum(1 for r in det if r["origin"] != "current_listing"),
+            "sip_candidates_by_origin": dict(Counter(str(r["origin"]).split(":")[0] for r in det)),
+            "by_sample": {
+                smp: {"days": len({r["trading_date"] for r in el if r["sample"] == smp}),
+                      "candidates": summarize_matches([r for r in cm if r["sample"] == smp]),
+                      "gated_breakouts": summarize_matches([r for r in gm if r["sample"] == smp])}
+                for smp in (IN_SAMPLE, EMBARGO, OUT_OF_SAMPLE)
+            },
             "sip_candidates_split_adjusted": sum(1 for r in det if r["split_adjusted"]),
             "sip_candidate_post_trigger_sip_coverage": _q([float(r["sip_post_trigger_coverage"]) for r in det
                                                           if r["sip_post_trigger_coverage"] is not None]),

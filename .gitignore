@@ -13,3 +13,4 @@ reports/datasets/*/*
 !reports/datasets/*/report.md
 !reports/datasets/*/manifest.json
 !reports/datasets/*/eligibility.csv
+!reports/datasets/*/quote_probe_summary.json

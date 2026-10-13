@@ -8,7 +8,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
@@ -18,6 +18,7 @@ DATA_BASE_URL = "https://data.alpaca.markets"
 ALLOWED_DATA_HOSTS = frozenset({"data.alpaca.markets", "data.sandbox.alpaca.markets"})
 BARS_PATH = "/v2/stocks/bars"
 CORPORATE_ACTIONS_PATH = "/v1/corporate-actions"
+QUOTES_PATH = "/v2/stocks/quotes"
 PAGE_LIMIT = 10000
 RETRYABLE_STATUSES = frozenset({0, 429, 500, 502, 503, 504})
 
@@ -57,39 +58,101 @@ def _iso_z(ts: datetime) -> str:
     return ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-class AlpacaHistoricalProvider:
-    name = "alpaca"
+class AlpacaHttp:
+    """GET-only JSON client with credential headers, a host allowlist, rate limiting and bounded retries."""
 
     def __init__(
         self,
         key_id: str,
         secret_key: str,
         *,
+        base_url: str,
+        allowed_hosts: frozenset[str],
         http_get: HttpGet = urllib_get,
-        base_url: str = DATA_BASE_URL,
         max_retries: int = 4,
         min_interval_s: float = 0.35,  # stays under the Basic plan's 200 requests/minute
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         host = urllib.parse.urlparse(base_url).hostname
-        if host not in ALLOWED_DATA_HOSTS:
-            raise ValueError(f"refusing non-market-data host {host!r}; allowed: {sorted(ALLOWED_DATA_HOSTS)}")
+        if host not in allowed_hosts:
+            raise ValueError(f"refusing host {host!r}; allowed: {sorted(allowed_hosts)}")
         if not key_id or not secret_key:
             raise AuthenticationError("APCA_API_KEY_ID and APCA_API_SECRET_KEY must be set")
+        self.key_id = key_id
         self._headers = {"APCA-API-KEY-ID": key_id, "APCA-API-SECRET-KEY": secret_key, "Accept": "application/json"}
         self._http_get = http_get
-        self._base_url = base_url.rstrip("/")
+        self.base_url = base_url.rstrip("/")
         self._max_retries = max_retries
         self._min_interval_s = min_interval_s
         self._sleep = sleep
         self._clock = clock
         self._last_request: float | None = None
         self.request_count = 0
+        self.bytes_received = 0
+
+    def get_json(self, path: str, params: Mapping[str, str], label: str) -> object:
+        url = f"{self.base_url}{path}?{urllib.parse.urlencode(params)}"
+        for attempt in range(self._max_retries + 1):
+            self._throttle()
+            resp = self._http_get(url, self._headers)
+            self.request_count += 1
+            self.bytes_received += len(resp.body)
+            if resp.status == 200:
+                return json.loads(resp.body)
+            message = _error_message(resp.body)
+            if resp.status == 401:
+                raise AuthenticationError(f"Alpaca rejected credentials: {message}", status=401, feed=label)
+            if resp.status == 403 or "subscription does not permit" in message.lower():
+                raise EntitlementError(
+                    f"{label.upper()} not permitted for this account: {message}", status=resp.status, feed=label
+                )
+            if resp.status in RETRYABLE_STATUSES and attempt < self._max_retries:
+                retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+                self._sleep(float(retry_after) if retry_after and retry_after.isdigit() else 2.0**attempt)
+                continue
+            raise ProviderError(f"Alpaca {label} request failed (HTTP {resp.status}): {message}",
+                                status=resp.status, feed=label)
+        raise AssertionError("unreachable")
+
+    def _throttle(self) -> None:
+        now = self._clock()
+        if self._last_request is not None:
+            wait = self._min_interval_s - (now - self._last_request)
+            if wait > 0:
+                self._sleep(wait)
+                now += wait
+        self._last_request = now
+
+
+class AlpacaHistoricalProvider:
+    name = "alpaca"
+
+    def __init__(self, key_id: str, secret_key: str, *, base_url: str = DATA_BASE_URL, **http_kwargs: object) -> None:
+        self._http = AlpacaHttp(key_id, secret_key, base_url=base_url, allowed_hosts=ALLOWED_DATA_HOSTS,
+                                **http_kwargs)  # type: ignore[arg-type]
+
+    @property
+    def request_count(self) -> int:
+        return self._http.request_count
+
+    @property
+    def bytes_received(self) -> int:
+        return self._http.bytes_received
 
     @classmethod
     def from_env(cls, **kwargs: object) -> AlpacaHistoricalProvider:
         return cls(os.environ.get("APCA_API_KEY_ID", ""), os.environ.get("APCA_API_SECRET_KEY", ""), **kwargs)  # type: ignore[arg-type]
+
+    def _pages(self, path: str, params: dict[str, str], label: str) -> Iterator[dict]:
+        while True:
+            payload = self._http.get_json(path, params, label)
+            assert isinstance(payload, dict)
+            yield payload
+            token = payload.get("next_page_token")
+            if not token:
+                return
+            params["page_token"] = token
 
     def get_bars(self, request: BarsRequest) -> list[Bar]:
         params: dict[str, str] = {
@@ -103,8 +166,7 @@ class AlpacaHistoricalProvider:
             "sort": "asc",
         }
         bars: list[Bar] = []
-        while True:
-            payload = self._get_json(f"{self._base_url}{BARS_PATH}?{urllib.parse.urlencode(params)}", request.feed)
+        for payload in self._pages(BARS_PATH, params, request.feed):
             for symbol, rows in (payload.get("bars") or {}).items():
                 for row in rows:
                     bars.append(
@@ -121,53 +183,20 @@ class AlpacaHistoricalProvider:
                             vwap=row.get("vw"),
                         )
                     )
-            token = payload.get("next_page_token")
-            if not token:
-                return bars
-            params["page_token"] = token
+        return bars
+
+    def iter_quotes(self, symbol: str, feed: str, start: datetime, end: datetime) -> Iterator[dict]:
+        """Raw historical NBBO (SIP) or IEX quote rows, page by page, without buffering them all."""
+        params = {"symbols": symbol, "start": _iso_z(start), "end": _iso_z(end), "feed": feed,
+                  "limit": str(PAGE_LIMIT), "sort": "asc"}
+        for payload in self._pages(QUOTES_PATH, params, f"{feed}_quotes"):
+            yield from (payload.get("quotes") or {}).get(symbol, [])
 
     def get_corporate_actions(self, types: str, start: date, end: date) -> dict[str, list[dict]]:
         """All corporate actions of the given comma-separated types processed in [start, end]."""
         params = {"types": types, "start": start.isoformat(), "end": end.isoformat(), "limit": "1000"}
         out: dict[str, list[dict]] = {}
-        while True:
-            url = f"{self._base_url}{CORPORATE_ACTIONS_PATH}?{urllib.parse.urlencode(params)}"
-            payload = self._get_json(url, "corporate_actions")
+        for payload in self._pages(CORPORATE_ACTIONS_PATH, params, "corporate_actions"):
             for kind, rows in (payload.get("corporate_actions") or {}).items():
                 out.setdefault(kind, []).extend(rows)
-            token = payload.get("next_page_token")
-            if not token:
-                return out
-            params["page_token"] = token
-
-    def _get_json(self, url: str, feed: str) -> dict:
-        for attempt in range(self._max_retries + 1):
-            self._throttle()
-            resp = self._http_get(url, self._headers)
-            self.request_count += 1
-            if resp.status == 200:
-                return json.loads(resp.body)
-            message = _error_message(resp.body)
-            if resp.status == 401:
-                raise AuthenticationError(f"Alpaca rejected credentials: {message}", status=401, feed=feed)
-            if resp.status == 403 or "subscription does not permit" in message.lower():
-                raise EntitlementError(
-                    f"{feed.upper()} not permitted for this account: {message}", status=resp.status, feed=feed
-                )
-            if resp.status in RETRYABLE_STATUSES and attempt < self._max_retries:
-                retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
-                self._sleep(float(retry_after) if retry_after and retry_after.isdigit() else 2.0**attempt)
-                continue
-            raise ProviderError(
-                f"Alpaca bars request failed (HTTP {resp.status}): {message}", status=resp.status, feed=feed
-            )
-        raise AssertionError("unreachable")
-
-    def _throttle(self) -> None:
-        now = self._clock()
-        if self._last_request is not None:
-            wait = self._min_interval_s - (now - self._last_request)
-            if wait > 0:
-                self._sleep(wait)
-                now += wait
-        self._last_request = now
+        return out

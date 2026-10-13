@@ -53,7 +53,12 @@ def render(result: DatasetResult) -> str:
         f"sha256 `{str(inp.get('nasdaqlisted_sha256'))[:12]}`/`{str(inp.get('otherlisted_sha256'))[:12]}`) plus "
         f"corporate actions {inp.get('corporate_actions_range')}: {inp.get('corporate_actions_counts')}.",
         "",
-        f"Symbols by origin: {s['universe_by_origin']}; renames handled in window: {s['renames_in_window']}.",
+        f"Alpaca paper `/v2/assets` snapshot (read-only): {inp.get('alpaca_assets_counts', 'not used')}.",
+        "",
+        f"Symbols by origin: {s['universe_by_origin']}; renames handled in window: {s['renames_in_window']}; "
+        f"symbol-days hidden as duplicate series: {len(result.tables.get('duplicate_series', []))}.",
+        "",
+        f"**Profitability:** {m.get('profitability', 'not evaluated')}.",
         "",
     ]
     if m["failed_sessions"]:
@@ -74,7 +79,9 @@ def render(result: DatasetResult) -> str:
         ("SIP candidate-gated breakouts", lambda x: _num(x["gated_breakouts"]["sip_total"]) if x else "n/a"),
         ("IEX recall of gated breakouts (same minute)", lambda x: _pct(x["gated_breakouts"]["iex_recall_of_sip"]) if x else "n/a"),
         ("SIP ungated breakouts (price band only)", lambda x: _num(x.get("ungated_breakouts_sip"))),
-        ("SIP candidates from delisted/renamed symbols", lambda x: _num(x.get("sip_candidates_non_current_origin"))),
+        ("SIP candidates not in today's listing", lambda x: _num(x.get("sip_candidates_non_current_origin"))),
+        ("  of which by origin", lambda x: ", ".join(f"{k} {v}" for k, v in sorted(x.get("sip_candidates_by_origin", {}).items())
+                                                     if k != "current_listing") or "none"),
         ("SIP candidates on split ex-dates", lambda x: _num(x.get("sip_candidates_split_adjusted"))),
         ("median SIP post-trigger minute coverage", lambda x: _pct(x["sip_candidate_post_trigger_sip_coverage"]["median"]) if x else "n/a"),
         ("median IEX post-trigger minute coverage", lambda x: _pct(x["sip_candidate_post_trigger_iex_coverage"]["median"]) if x else "n/a"),
@@ -82,8 +89,22 @@ def render(result: DatasetResult) -> str:
     ]
     L += [f"| {name} | {fn(pm)} | {fn(ah)} |" for name, fn in rows]
     L += ["", f"Split ex-dates checked: {len(result.tables.get('split_checks', []))}; candidate decisions changed by "
-          f"split adjustment: {len(result.tables.get('split_candidate_changes', []))}.", "",
-          "## Files", "",
+          f"split adjustment: {len(result.tables.get('split_candidate_changes', []))}.", ""]
+    split = m.get("chronological_split")
+    if isinstance(split, dict):
+        L += ["## Chronological split", "",
+              f"Out-of-sample fraction {split['oos_fraction']:.2f}, embargo {split['embargo_days']} trading day(s). "
+              "Choose parameters on in-sample days only; report out-of-sample once.", "",
+              "| sample | days | dates | PM SIP candidates | AH SIP candidates | PM gated breakouts | AH gated breakouts |",
+              "|---|---:|---|---:|---:|---:|---:|"]
+        for name in ("in_sample", "embargo", "out_of_sample"):
+            blk = split[name]
+            per = [s.get(sess, {}).get("by_sample", {}).get(name, {}) for sess in ("premarket", "afterhours")]
+            cells = [_num(p.get(k, {}).get("sip_total")) for k in ("candidates",) for p in per]
+            cells += [_num(p.get(k, {}).get("sip_total")) for k in ("gated_breakouts",) for p in per]
+            L.append(f"| {name} | {blk['days']} | {blk['first']} to {blk['last']} | " + " | ".join(cells) + " |")
+        L.append("")
+    L += ["## Files", "",
           "`manifest.json`, `eligibility.csv`, `coverage_buckets.csv.gz` (30-min ET buckets), `candidate_detail.csv`, "
           "`candidate_matches.csv`, `breakout_matches.csv`, `candidates.csv.gz`, `split_checks.csv`, "
           "`split_candidate_changes.csv`, `universe.csv.gz`, `fetch_log.csv.gz`, `inputs/` (directory and "

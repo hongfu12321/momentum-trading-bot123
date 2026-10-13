@@ -56,7 +56,7 @@ def fetch_text(url: str) -> str:
 
 def test_dataset_point_in_time_rules_and_reproducible_cache(tmp_path: Path) -> None:
     fake = FakeAlpaca()
-    result = build_dataset(fake, DatasetConfig(D7, D8), tmp_path, now_utc=NOW, fetch_text=fetch_text, code_sha="t")
+    result = build_dataset(fake, DatasetConfig(D7, D8, embargo_days=0), tmp_path, now_utc=NOW, fetch_text=fetch_text, code_sha="t")
     assert result.status == "complete" and result.manifest["orders_placed"] == 0
 
     elig = {(r["trading_date"], r["session"]): r for r in result.tables["eligibility"]}
@@ -87,7 +87,7 @@ def test_dataset_point_in_time_rules_and_reproducible_cache(tmp_path: Path) -> N
 
     # Rerun on the same folder: saved inputs and bar cache are reused; no new API calls, same results.
     again = FakeAlpaca()
-    rerun = build_dataset(again, DatasetConfig(D7, D8), tmp_path, now_utc=NOW, fetch_text=lambda u: "", code_sha="t")
+    rerun = build_dataset(again, DatasetConfig(D7, D8, embargo_days=0), tmp_path, now_utc=NOW, fetch_text=lambda u: "", code_sha="t")
     assert again.request_count == 0 and again.ca_calls == 0
     for name in ("eligibility", "candidate_detail", "candidate_matches", "coverage_buckets", "split_checks"):
         assert rerun.tables[name] == result.tables[name], name
@@ -100,6 +100,6 @@ def test_sip_block_aborts_with_explicit_status(tmp_path: Path) -> None:
         def get_bars(self, req: BarsRequest) -> list[Bar]:
             raise EntitlementError("subscription does not permit querying recent SIP data", status=403, feed=req.feed)
 
-    result = build_dataset(Blocked(), DatasetConfig(D7, D8), tmp_path, now_utc=NOW, fetch_text=fetch_text)
+    result = build_dataset(Blocked(), DatasetConfig(D7, D8, embargo_days=0), tmp_path, now_utc=NOW, fetch_text=fetch_text)
     assert result.status == "sip_entitlement_blocked"
     assert result.tables["candidate_detail"] == [] and result.tables["fetch_log"][0]["http_status"] == 403
