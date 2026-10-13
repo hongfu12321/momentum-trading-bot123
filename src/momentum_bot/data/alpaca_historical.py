@@ -10,13 +10,14 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from .provider import AuthenticationError, Bar, BarsRequest, EntitlementError, ProviderError
 
 DATA_BASE_URL = "https://data.alpaca.markets"
 ALLOWED_DATA_HOSTS = frozenset({"data.alpaca.markets", "data.sandbox.alpaca.markets"})
 BARS_PATH = "/v2/stocks/bars"
+CORPORATE_ACTIONS_PATH = "/v1/corporate-actions"
 PAGE_LIMIT = 10000
 RETRYABLE_STATUSES = frozenset({0, 429, 500, 502, 503, 504})
 
@@ -123,6 +124,20 @@ class AlpacaHistoricalProvider:
             token = payload.get("next_page_token")
             if not token:
                 return bars
+            params["page_token"] = token
+
+    def get_corporate_actions(self, types: str, start: date, end: date) -> dict[str, list[dict]]:
+        """All corporate actions of the given comma-separated types processed in [start, end]."""
+        params = {"types": types, "start": start.isoformat(), "end": end.isoformat(), "limit": "1000"}
+        out: dict[str, list[dict]] = {}
+        while True:
+            url = f"{self._base_url}{CORPORATE_ACTIONS_PATH}?{urllib.parse.urlencode(params)}"
+            payload = self._get_json(url, "corporate_actions")
+            for kind, rows in (payload.get("corporate_actions") or {}).items():
+                out.setdefault(kind, []).extend(rows)
+            token = payload.get("next_page_token")
+            if not token:
+                return out
             params["page_token"] = token
 
     def _get_json(self, url: str, feed: str) -> dict:

@@ -154,7 +154,7 @@ def run_m1(
                     rows = per_feed.get((sym, d, session), [])
                     missing_rows += missing_interval_rows(windows[d][session], sym, feed, rows)
                     ref = reference_close(sym, d, session, closes, prev_day)
-                    cand, brk = scan_session(feed, (sym, d, session), rows, ref, params)
+                    cand, brk = scan_session(feed, (sym, d, session), rows, ref, params, windows[d][session].start_utc)
                     if cand and d in compare_days:
                         events[feed]["candidate"].append(cand)
                     if d in compare_days:

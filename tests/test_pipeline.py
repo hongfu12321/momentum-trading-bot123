@@ -77,3 +77,15 @@ def test_source_has_no_order_or_trading_endpoints() -> None:
     text = "\n".join(p.read_text(encoding="utf-8") for p in src.rglob("*.py")).lower()
     for forbidden in ("/v2/orders", "submit_order", "paper-api.alpaca.markets\"", "api.alpaca.markets/v2"):
         assert forbidden not in text
+
+
+def test_closing_auction_bar_volume_excluded_from_afterhours_gate() -> None:
+    from conftest import bar
+    from momentum_bot.compare import ScanParams, scan_session
+    from momentum_bot.data.market_calendar import session_windows
+
+    start = session_windows(DAY)["afterhours"].start_utc
+    rows = [bar("sip", DAY, "16:00", 2.00, 2.00, 5_000_000), bar("sip", DAY, "16:01", 2.20, 2.20, 1_000)]
+    key = ("TEST", DAY, "afterhours")
+    assert scan_session("sip", key, rows, 2.00, ScanParams(), start)[0] is None
+    assert scan_session("sip", key, rows, 2.00, ScanParams(exclude_closing_auction_bar=False), start)[0] is not None

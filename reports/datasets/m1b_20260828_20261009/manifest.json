@@ -1,0 +1,181 @@
+{
+  "milestone": "M1-B dataset",
+  "status": "complete",
+  "created_at_utc": "2026-10-13T18:13:09.278510+00:00",
+  "as_of_utc": "2026-10-13T17:57:09.278510+00:00",
+  "code_sha": "aa17b19",
+  "start_date": "2026-08-28",
+  "end_date": "2026-10-09",
+  "trading_days": [
+    "2026-08-28",
+    "2026-08-31",
+    "2026-09-01",
+    "2026-09-02",
+    "2026-09-03",
+    "2026-09-04",
+    "2026-09-08",
+    "2026-09-09",
+    "2026-09-10",
+    "2026-09-11",
+    "2026-09-14",
+    "2026-09-15",
+    "2026-09-16",
+    "2026-09-17",
+    "2026-09-18",
+    "2026-09-21",
+    "2026-09-22",
+    "2026-09-23",
+    "2026-09-24",
+    "2026-09-25",
+    "2026-09-28",
+    "2026-09-29",
+    "2026-09-30",
+    "2026-10-01",
+    "2026-10-02",
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09"
+  ],
+  "reference_day": "2026-08-27",
+  "feeds": [
+    "sip",
+    "iex"
+  ],
+  "timeframe": "1Min",
+  "adjustment": "raw",
+  "reference_close": "SIP 1Day bar close (regular-session official close), split-adjusted on ex-dates",
+  "scan_params": {
+    "min_price": 1.0,
+    "max_price": 20.0,
+    "premarket_min_change": 0.1,
+    "afterhours_min_change": 0.05,
+    "min_session_volume": 100000,
+    "breakout_volume_multiple": 2.0,
+    "breakout_lookback": 5,
+    "exclude_closing_auction_bar": true
+  },
+  "symbol_chunk": 1000,
+  "inputs": {
+    "nasdaqlisted_sha256": "ae20ca73e1b90d0351cdefac5ed21295a5908677be0615b7ad6cb13ad0d43de5",
+    "nasdaqlisted_file_creation_time": "1013202612:11",
+    "otherlisted_sha256": "fb08aa6d0c841ac45032ff0811f29e2a530e4a09bb735be1bb206a4d4f5bcd44",
+    "otherlisted_file_creation_time": "1013202612:11",
+    "corporate_actions_range": [
+      "2026-08-27",
+      "2026-10-13"
+    ],
+    "corporate_actions_downloaded_at_utc": "2026-10-13T16:43:18.424988+00:00",
+    "corporate_actions_sha256": "364a079650a58c22a065fc0b6b547f4346a38fc050a6768f272bb2d1f080be54",
+    "corporate_actions_counts": {
+      "cash_mergers": 52,
+      "forward_splits": 28,
+      "name_changes": 85,
+      "reverse_splits": 179,
+      "stock_mergers": 27,
+      "worthless_removals": 41
+    }
+  },
+  "failed_sessions": [],
+  "api_requests_this_run": 0,
+  "cached_fetches_reused": 121,
+  "summary": {
+    "universe_by_origin": {
+      "current_listing": 5897,
+      "delisted": 88,
+      "renamed_to": 30
+    },
+    "renames_in_window": 31,
+    "premarket": {
+      "days": 30,
+      "mean_eligible_symbols": 3380.9666666666667,
+      "sip_bars": 1269181,
+      "iex_bars": 22864,
+      "sip_volume": 24428301048,
+      "iex_volume": 37037415,
+      "iex_volume_share": 0.0015161682724977035,
+      "candidates": {
+        "both": 45,
+        "sip_only": 585,
+        "iex_only": 0,
+        "sip_total": 630,
+        "iex_recall_of_sip": 0.07142857142857142
+      },
+      "gated_breakouts": {
+        "both": 14,
+        "sip_only": 689,
+        "iex_only": 18,
+        "sip_total": 703,
+        "iex_recall_of_sip": 0.01991465149359886
+      },
+      "ungated_breakouts_sip": 6987,
+      "sip_candidates_non_current_origin": 9,
+      "sip_candidates_split_adjusted": 4,
+      "sip_candidate_post_trigger_sip_coverage": {
+        "n": 630,
+        "median": 0.9786474164133738,
+        "p25": 0.7714285714285715,
+        "p75": 1.0
+      },
+      "sip_candidate_post_trigger_iex_coverage": {
+        "n": 630,
+        "median": 0.015084637786676375,
+        "p25": 0.0,
+        "p75": 0.15853658536585366
+      },
+      "sip_candidate_post_trigger_max_gap_minutes": {
+        "n": 630,
+        "median": 1.0,
+        "p25": 0.0,
+        "p75": 5.0
+      }
+    },
+    "afterhours": {
+      "days": 30,
+      "mean_eligible_symbols": 3439.4666666666667,
+      "sip_bars": 944819,
+      "iex_bars": 4759,
+      "sip_volume": 9355936031,
+      "iex_volume": 10042220,
+      "iex_volume_share": 0.0010733527855177787,
+      "candidates": {
+        "both": 10,
+        "sip_only": 564,
+        "iex_only": 0,
+        "sip_total": 574,
+        "iex_recall_of_sip": 0.017421602787456445
+      },
+      "gated_breakouts": {
+        "both": 4,
+        "sip_only": 777,
+        "iex_only": 0,
+        "sip_total": 781,
+        "iex_recall_of_sip": 0.005121638924455826
+      },
+      "ungated_breakouts_sip": 4302,
+      "sip_candidates_non_current_origin": 15,
+      "sip_candidates_split_adjusted": 0,
+      "sip_candidate_post_trigger_sip_coverage": {
+        "n": 574,
+        "median": 0.790444208789914,
+        "p25": 0.5260115606936416,
+        "p75": 0.9746835443037974
+      },
+      "sip_candidate_post_trigger_iex_coverage": {
+        "n": 574,
+        "median": 0.0,
+        "p25": 0.0,
+        "p75": 0.0
+      },
+      "sip_candidate_post_trigger_max_gap_minutes": {
+        "n": 574,
+        "median": 4.0,
+        "p25": 1.0,
+        "p75": 10.0
+      }
+    }
+  },
+  "orders_placed": 0,
+  "candidate_rows": 1204
+}
