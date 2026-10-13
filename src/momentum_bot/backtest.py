@@ -197,10 +197,13 @@ class QuoteStore:
         self.source, self.cache_dir = source, cache_dir
         cache_dir.mkdir(parents=True, exist_ok=True)
 
+    def path(self, sig: Signal, start: datetime, end: datetime) -> Path:
+        return self.cache_dir / f"{sig.symbol}_{start:%Y%m%dT%H%M%S}_{end:%H%M%S}.jsonl.gz"
+
     def get(self, sig: Signal, start: datetime, end: datetime) -> list[Quote]:
         if end <= start:
             return []
-        path = self.cache_dir / f"{sig.symbol}_{start:%Y%m%dT%H%M%S}_{end:%H%M%S}.jsonl.gz"
+        path = self.path(sig, start, end)
         if path.is_file():
             with gzip.open(path, "rt", encoding="utf-8") as fh:
                 rows = [json.loads(line) for line in fh]
