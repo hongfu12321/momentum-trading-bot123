@@ -500,7 +500,7 @@ function draw(){
  const dim=$("dim").value;$("dimname").textContent=dim;const g={};T.forEach(t=>{const b=bucket(t[dim],EDGES[dim]);(g[b]=g[b]||[]).push(t.r_multiple)});
  const keys=Object.keys(g).sort((a,b)=>parseFloat(a.replace(/[<>=]/g,""))-parseFloat(b.replace(/[<>=]/g,""))||a.localeCompare(b));
  el=svg($("bars"),360,220);const vals=keys.map(k=>mean(g[k])),am=Math.max(0.1,...vals.map(Math.abs));const bw=Math.min(40,320/Math.max(1,keys.length));
- keys.forEach((kk,i)=>{const v=vals[i],h=80*Math.abs(v)/am,x=30+i*bw;add(el,"rect",{x,y:v>=0?100-h:100,width:bw-4,height:h,fill:v>=0?css("--pos"):css("--neg"),opacity:g[kk].length<30?0.45:1});add(el,"text",{x,y:212,fill:css("--muted"),"font-size":9},`${kk} (${g[kk].length})`)});axis(el,25,350,100);
+ keys.forEach((kk,i)=>{const v=vals[i],h=80*Math.abs(v)/am,x=30+i*bw;add(el,"rect",{x,y:v>=0?100-h:100,width:bw-4,height:h,fill:v>=0?css("--pos"):css("--neg"),opacity:g[kk].length<30?0.45:1});add(el,"text",{x:x+bw/2,y:186,fill:css("--muted"),"font-size":9,"text-anchor":"end",transform:`rotate(-35 ${x+bw/2} 186)`},`${kk} (${g[kk].length})`)});axis(el,25,350,100);
  // scatter
  el=svg($("scatter"),360,220);const sx=v=>30+(v+1.5)/4*320,sy=v=>200-(v+1.5)/4*190;axis(el,30,350,sy(0),"MAE (x) vs MFE (y), clipped to -1.5…2.5R");
  T.forEach(t=>{if(t.mfe_r===null||t.mae_r===null)return;add(el,"circle",{cx:sx(Math.max(-1.5,Math.min(2.5,t.mae_r))),cy:sy(Math.max(-1.5,Math.min(2.5,t.mfe_r))),r:2.5,fill:t.r_multiple>0?css("--pos"):css("--neg"),opacity:0.7})});
