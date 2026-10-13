@@ -1,7 +1,7 @@
 # M1-B extended-hours dataset report (generated)
 
 **Status:** `complete` · **Trading days:** 30 (2026-08-28 to 2026-10-09) · **API requests this run:** 0 (cached fetches reused: 121) · **Orders placed:** 0  
-**Code:** `de964b5` · **Created:** 2026-10-13T17:13:08.420753+00:00 · **Data as of:** 2026-10-13T16:57:08.420753+00:00  
+**Code:** `aa17b19` · **Created:** 2026-10-13T18:13:09.278510+00:00 · **Data as of:** 2026-10-13T17:57:09.278510+00:00  
 **Bars:** 1Min SIP and IEX, adjustment=raw · **Reference close:** SIP 1Day bar close (regular-session official close), split-adjusted on ex-dates
 
 ## Universe
@@ -18,7 +18,7 @@ Symbols by origin: {'current_listing': 5897, 'delisted': 88, 'renamed_to': 30}; 
 | mean eligible symbols / session | 3,381 | 3,439 |
 | SIP 1m bars | 1,269,181 | 944,819 |
 | IEX 1m bars | 22,864 | 4,759 |
-| IEX volume share of SIP | 0.2% | 0.0% |
+| IEX volume share of SIP | 0.2% | 0.1% |
 | SIP scanner candidates | 630 | 574 |
 | IEX candidates matching SIP | 45 | 10 |
 | IEX-only candidates | 0 | 0 |
