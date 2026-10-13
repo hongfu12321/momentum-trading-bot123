@@ -372,6 +372,7 @@ def build_dataset(
                            "split_adjusted": sym in raw_refs, "sip_candidate": bool(found["sip"]),
                            "iex_candidate": bool(found["iex"]), "trigger_feed": trigger.feed,
                            "trigger_bar_start_utc": trigger.bar_start_utc.isoformat(),
+                           "trigger_signal_available_utc": trigger.observed_at_utc.isoformat(),
                            "trigger_et": trigger.bar_start_utc.astimezone(ET).strftime("%H:%M")}
                     for f in FEEDS:
                         rows = by[f].get(sym, [])

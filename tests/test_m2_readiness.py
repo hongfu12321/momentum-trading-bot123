@@ -71,6 +71,11 @@ def test_dataset_adds_alpaca_inactive_symbols_and_drops_duplicate_series(tmp_pat
     split = result.manifest["chronological_split"]
     assert split["in_sample"]["days"] == 1 and split["out_of_sample"]["first"] == D8.isoformat()
     assert "not evaluated" in result.manifest["profitability"]
+    for r in result.tables["candidate_detail"]:
+        assert (datetime.fromisoformat(r["trigger_signal_available_utc"])
+                == datetime.fromisoformat(r["trigger_bar_start_utc"]) + timedelta(minutes=1))
+    for r in result.tables["breakout_matches"]:
+        assert datetime.fromisoformat(r["sip_signal_available_utc"]) > datetime.fromisoformat(r["sip_bar_start_utc"])
     assert json.loads((tmp_path / "inputs" / "alpaca_assets.json").read_text())["assets"]
 
 
@@ -78,16 +83,34 @@ def q(sec: float, bid: float, ask: float) -> dict:
     return {"t": (T0 + timedelta(seconds=sec)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "123Z", "bp": bid, "ap": ask}
 
 
-def test_summarize_quotes_spreads_states_and_gaps() -> None:
+def test_summarize_quotes_excludes_locked_crossed_from_spread_eligibility() -> None:
     rows = [q(0, 10.0, 10.1), q(30, 10.0, 10.0), q(60, 10.2, 10.1), q(90, 0, 10.1), q(150, 9.9, 10.1)]
-    s = quotes.summarize_quotes(rows, T0, T0 + timedelta(minutes=3))
-    assert (s["quotes"], s["two_sided"], s["locked"], s["crossed"], s["one_sided"]) == (5, 3, 1, 1, 1)
+    s = quotes.summarize_quotes(rows, T0, T0 + timedelta(minutes=3), max_quote_age_s=60)
+    assert (s["quotes"], s["executable"], s["locked"], s["crossed"], s["one_sided"]) == (5, 2, 1, 1, 1)
     assert s["minutes"] == 3 and s["minutes_with_quote"] == 3
     assert s["max_gap_seconds"] == 60
-    assert s["median_spread_bps"] == pytest.approx(0.1 / 10.05 * 10_000)
-    # time weights: 99.5 bps for 30s, 0 bps for 30s, 200 bps for the last 30s
-    assert s["time_weighted_spread_bps"] == pytest.approx((0.1 / 10.05 * 1e4 * 30 + 0.2 / 10.0 * 1e4 * 30) / 90)
-    assert s["time_share_within_spread_cap"] == pytest.approx(30 / 180)  # only the locked 30s is within 50 bps
+    assert s["median_spread_bps"] == pytest.approx((0.1 / 10.05 + 0.2 / 10.0) / 2 * 10_000)  # executable only
+    # Every quote stays fresh (age cap 60s); only the two executable 30s spans count for spread.
+    assert s["fresh_quote_time_share"] == pytest.approx(1.0)
+    assert s["executable_time_share"] == pytest.approx(60 / 180)
+    assert s["time_weighted_spread_bps"] == pytest.approx((0.1 / 10.05 * 1e4 + 0.2 / 10.0 * 1e4) / 2)
+    assert s["time_share_within_spread_cap"] == 0  # the locked 0 bps span is not executable
+
+
+def test_summarize_quotes_stops_counting_stale_quotes_after_max_age() -> None:
+    rows = [q(0, 10.0, 10.02), q(20, 10.0, 10.5)]  # 20 bps (inside the cap), then 488 bps
+    s = quotes.summarize_quotes(rows, T0, T0 + timedelta(seconds=60))  # default max age 3s
+    assert s["fresh_quote_time_share"] == pytest.approx(6 / 60)
+    assert s["executable_time_share"] == pytest.approx(6 / 60)
+    assert s["time_share_within_spread_cap"] == pytest.approx(3 / 60)  # not 20/60: the 20 bps quote goes stale
+    assert s["time_weighted_spread_bps"] == pytest.approx((0.02 / 10.01 + 0.5 / 10.25) / 2 * 1e4)
+    late = quotes.summarize_quotes([q(30, 10.0, 10.02)], T0, T0 + timedelta(seconds=60))
+    assert late["fresh_quote_time_share"] == pytest.approx(3 / 60)  # no quote counted before the first one
+
+
+def test_quote_state_classification() -> None:
+    assert [quotes.quote_state(b, a) for b, a in ((1, 1.01), (1, 1), (1.01, 1), (0, 1), (1, 0))] == [
+        "executable", "locked", "crossed", "one_sided", "one_sided"]
 
 
 class FakeQuotes:
@@ -120,6 +143,7 @@ def test_probe_samples_deterministically_caches_and_reports_blocking(tmp_path: P
     stats = quotes.probe(src, picked, 30, tmp_path)
     ah = next(s for s in stats if s.session == "afterhours")
     assert ah.window_end_utc == "2024-03-09T01:00:00+00:00"  # clipped at 20:00 ET
+    assert (ah.trigger_bar_start_utc, ah.window_start_utc) == ("2024-03-09T00:45:00+00:00", "2024-03-09T00:46:00+00:00")
     assert all(s.status == "ok" and s.quotes == 2 for s in stats)
     again = quotes.probe(src, picked, 30, tmp_path)
     assert {s.status for s in again} == {"cached"} and src.request_count == 4
@@ -129,3 +153,14 @@ def test_probe_samples_deterministically_caches_and_reports_blocking(tmp_path: P
 
     blocked = quotes.probe(FakeQuotes(blocked=True), picked, 30, tmp_path / "b")
     assert [s.status for s in blocked] == ["entitlement_blocked", "skipped", "skipped", "skipped"]
+
+
+def test_signals_become_available_only_when_the_trigger_bar_completes() -> None:
+    from momentum_bot.compare import Event
+
+    row = {"trigger_bar_start_utc": T0.isoformat()}
+    assert quotes.signal_available_utc(row) == T0 + timedelta(minutes=1)
+    explicit = {**row, "trigger_signal_available_utc": (T0 + timedelta(minutes=1)).isoformat()}
+    assert quotes.signal_available_utc(explicit) == T0 + timedelta(minutes=1)
+    with pytest.raises(ValueError, match="completes"):
+        Event("breakout", "sip", "X", T0.date(), "premarket", T0, T0 + timedelta(seconds=59), 2.0, 0.2, 1, True)

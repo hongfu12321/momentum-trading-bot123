@@ -21,9 +21,12 @@ from statistics import median
 from typing import Protocol
 
 from .data.market_calendar import session_windows
+from .data.normalize import BAR_LENGTH
 from .data.provider import AuthenticationError, EntitlementError, ProviderError
 
 SPREAD_CAP_BPS = 50.0  # docs/DESIGN.md section 5: spread cap 0.5%
+MAX_QUOTE_AGE_S = 3.0  # docs/DESIGN.md section 5: quote age <= 3s
+EXECUTABLE, LOCKED, CROSSED, ONE_SIDED = "executable", "locked", "crossed", "one_sided"
 
 
 class QuoteSource(Protocol):
@@ -39,7 +42,8 @@ class QuoteWindowStats:
     trading_date: str
     session: str
     sample: str
-    window_start_utc: str
+    trigger_bar_start_utc: str
+    window_start_utc: str  # when the trigger bar completed, i.e. when the signal became available
     window_end_utc: str
     status: str = "ok"
     error: str | None = None
@@ -49,12 +53,14 @@ class QuoteWindowStats:
     seconds: float = 0.0
     minutes: int = 0
     minutes_with_quote: int = 0
-    two_sided: int = 0
+    executable: int = 0
     locked: int = 0
     crossed: int = 0
     one_sided: int = 0
     median_spread_bps: float | None = None
     p90_spread_bps: float | None = None
+    fresh_quote_time_share: float | None = None
+    executable_time_share: float | None = None
     time_weighted_spread_bps: float | None = None
     time_share_within_spread_cap: float | None = None
     max_gap_seconds: float | None = None
@@ -64,52 +70,77 @@ def _ts(raw: str) -> datetime:
     return datetime.fromisoformat(raw)  # Python 3.11+ accepts nanosecond fractions (truncated to µs)
 
 
+def quote_state(bid: float, ask: float) -> str:
+    """'executable' only for a two-sided quote with ask > bid; locked and crossed quotes are diagnostics."""
+    if bid <= 0 or ask <= 0:
+        return ONE_SIDED
+    if ask < bid:
+        return CROSSED
+    return LOCKED if ask == bid else EXECUTABLE
+
+
+def spread_bps(bid: float, ask: float) -> float:
+    return (ask - bid) / ((ask + bid) / 2) * 10_000
+
+
 def summarize_quotes(
-    quotes: Iterable[Mapping[str, object]], start: datetime, end: datetime, spread_cap_bps: float = SPREAD_CAP_BPS,
+    quotes: Iterable[Mapping[str, object]], start: datetime, end: datetime,
+    spread_cap_bps: float = SPREAD_CAP_BPS, max_quote_age_s: float = MAX_QUOTE_AGE_S,
 ) -> dict[str, object]:
-    """Pure statistics for one window. Spread is (ask - bid) / mid in basis points on valid two-sided quotes."""
+    """Pure statistics for one window.
+
+    A quote counts as fresh for at most max_quote_age_s after its timestamp. Spread eligibility
+    (time-weighted spread, time within the spread cap) uses only fresh *executable* quotes:
+    two-sided with ask > bid. Locked, crossed and one-sided quotes are counted separately and
+    never make a window eligible. Time before the first quote in the window counts as no quote.
+    """
     spreads: list[float] = []
-    weighted = weight = tight = 0.0
+    weighted = fresh_time = exec_time = tight = 0.0
     minutes: set[int] = set()
-    counts = {"quotes": 0, "two_sided": 0, "locked": 0, "crossed": 0, "one_sided": 0}
-    last_t, last_spread, max_gap = start, None, 0.0
+    counts = {"quotes": 0, EXECUTABLE: 0, LOCKED: 0, CROSSED: 0, ONE_SIDED: 0}
+    last_t: datetime = start
+    last_spread: float | None = None
+    seen_quote = False
+    max_gap = 0.0
+
+    def close_interval(t: datetime) -> None:
+        nonlocal weighted, fresh_time, exec_time, tight
+        if not seen_quote:
+            return
+        fresh = min((t - last_t).total_seconds(), max_quote_age_s)
+        fresh_time += fresh
+        if last_spread is not None:
+            exec_time += fresh
+            weighted += last_spread * fresh
+            tight += fresh if last_spread <= spread_cap_bps else 0.0
+
     for q in quotes:
         t = _ts(str(q["t"]))
         counts["quotes"] += 1
         minutes.add(int((t - start).total_seconds() // 60))
         max_gap = max(max_gap, (t - last_t).total_seconds())
-        if last_spread is not None:
-            dt = (t - last_t).total_seconds()
-            weighted += last_spread * dt
-            weight += dt
-            tight += dt if last_spread <= spread_cap_bps else 0.0
+        close_interval(t)
         bid, ask = float(q.get("bp") or 0), float(q.get("ap") or 0)  # type: ignore[arg-type]
-        last_spread = None
-        if bid <= 0 or ask <= 0:
-            counts["one_sided"] += 1
-        elif ask < bid:
-            counts["crossed"] += 1
-        else:
-            counts["two_sided"] += 1
-            counts["locked"] += ask == bid
-            last_spread = (ask - bid) / ((ask + bid) / 2) * 10_000
+        state = quote_state(bid, ask)
+        counts[state] += 1
+        last_spread = spread_bps(bid, ask) if state == EXECUTABLE else None
+        if last_spread is not None:
             spreads.append(last_spread)
-        last_t = t
+        last_t, seen_quote = t, True
     max_gap = max(max_gap, (end - last_t).total_seconds())
-    if last_spread is not None:
-        dt = (end - last_t).total_seconds()
-        weighted += last_spread * dt
-        weight += dt
-        tight += dt if last_spread <= spread_cap_bps else 0.0
+    close_interval(end)
     spreads.sort()
+    span = (end - start).total_seconds()
     return {
         **counts,
-        "minutes": math.ceil((end - start).total_seconds() / 60),
+        "minutes": math.ceil(span / 60),
         "minutes_with_quote": len(minutes),
         "median_spread_bps": median(spreads) if spreads else None,
         "p90_spread_bps": spreads[min(len(spreads) - 1, int(0.9 * len(spreads)))] if spreads else None,
-        "time_weighted_spread_bps": weighted / weight if weight else None,
-        "time_share_within_spread_cap": tight / (end - start).total_seconds() if end > start else None,
+        "fresh_quote_time_share": fresh_time / span if span > 0 else None,
+        "executable_time_share": exec_time / span if span > 0 else None,
+        "time_weighted_spread_bps": weighted / exec_time if exec_time else None,
+        "time_share_within_spread_cap": tight / span if span > 0 else None,
         "max_gap_seconds": max_gap,
     }
 
@@ -126,22 +157,29 @@ def sample_candidates(rows: list[dict[str, str]], n: int, seed: int) -> list[dic
     return sorted(out, key=lambda r: (r["trading_date"], r["session"], r["symbol"]))
 
 
+def signal_available_utc(row: Mapping[str, str]) -> datetime:
+    """A trigger is known only once its bar completes; older datasets lack the explicit column."""
+    if row.get("trigger_signal_available_utc"):
+        return datetime.fromisoformat(row["trigger_signal_available_utc"])
+    return datetime.fromisoformat(row["trigger_bar_start_utc"]) + BAR_LENGTH
+
+
 def probe(source: QuoteSource, candidates: list[dict[str, str]], minutes: int, raw_dir: Path) -> list[QuoteWindowStats]:
     raw_dir.mkdir(parents=True, exist_ok=True)
     out: list[QuoteWindowStats] = []
     blocked: str | None = None
     for c in candidates:
-        start = datetime.fromisoformat(c["trigger_bar_start_utc"])
+        start = signal_available_utc(c)
         w = session_windows(datetime.fromisoformat(c["trading_date"]).date())[c["session"]]
         end = min(start + timedelta(minutes=minutes), w.end_utc)
         stats = QuoteWindowStats(c["symbol"], c["trading_date"], c["session"], c.get("sample", ""),
-                                 start.isoformat(), end.isoformat())
+                                 c["trigger_bar_start_utc"], start.isoformat(), end.isoformat())
         if blocked:
             stats.status, stats.error = "skipped", blocked
             out.append(stats)
             continue
         r0, b0, t0 = source.request_count, source.bytes_received, time.perf_counter()
-        raw_path = raw_dir / f"{c['trading_date']}_{c['session']}_{c['symbol']}_{minutes}m.jsonl.gz"
+        raw_path = raw_dir / f"{c['trading_date']}_{c['session']}_{c['symbol']}_{start:%H%M}_{minutes}m.jsonl.gz"
         cost_path = raw_path.with_name(raw_path.name.replace(".jsonl.gz", ".cost.json"))
         try:
             if raw_path.is_file() and cost_path.is_file():
@@ -188,6 +226,8 @@ def summarize_probe(stats: list[QuoteWindowStats], total_candidates: int, minute
             "quotes_per_window": _q([float(s.quotes) for s in g]),
             "minute_coverage": _q([s.minutes_with_quote / s.minutes for s in g if s.minutes]),
             "median_spread_bps": _q([s.median_spread_bps for s in g if s.median_spread_bps is not None]),
+            "fresh_quote_time_share": _q([s.fresh_quote_time_share for s in g if s.fresh_quote_time_share is not None]),
+            "executable_time_share": _q([s.executable_time_share for s in g if s.executable_time_share is not None]),
             "time_weighted_spread_bps": _q([s.time_weighted_spread_bps for s in g if s.time_weighted_spread_bps is not None]),
             "time_share_within_spread_cap": _q([s.time_share_within_spread_cap for s in g
                                                 if s.time_share_within_spread_cap is not None]),
@@ -205,6 +245,8 @@ def summarize_probe(stats: list[QuoteWindowStats], total_candidates: int, minute
     return {
         "window_minutes_after_trigger": minutes,
         "spread_cap_bps": SPREAD_CAP_BPS,
+        "max_quote_age_seconds": MAX_QUOTE_AGE_S,
+        "window_starts_at": "trigger bar completion (signal available), not trigger bar start",
         "status_counts": {k: sum(1 for s in stats if s.status == k) for k in sorted({s.status for s in stats})},
         "errors": sorted({s.error for s in stats if s.error}),
         "by_session": by_session,
