@@ -1,19 +1,20 @@
-"""Command line entry point. M1 only: historical market data; this tool never places orders."""
+"""Command line entry point. Historical market data and offline simulation only; this tool never places orders."""
 
 from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import quotes
+from . import backtest, quotes
 from .data.alpaca_assets import AlpacaPaperAssets
 from .data.alpaca_historical import AlpacaHistoricalProvider
 from .data.market_calendar import CalendarCoverageError
-from .data.provider import AuthenticationError
+from .data.provider import AuthenticationError, EntitlementError
 from .dataset import DatasetConfig, build_dataset
 from .dataset_report import write_dataset
 from .pipeline import run_m1
@@ -66,6 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
     qp.add_argument("--sample", type=int, default=60, help="Candidates to sample, split evenly by session")
     qp.add_argument("--minutes", type=int, default=30, help="Quote window after each trigger bar")
     qp.add_argument("--seed", type=int, default=20261013, help="Sampling seed")
+    bt = sub.add_parser("m2-backtest", help="Simulate the breakout strategy against historical SIP quotes (no orders).")
+    bt.add_argument("--dataset", required=True, help="Dataset folder built by m1-dataset")
+    bt.add_argument("--sample", choices=("in_sample", "out_of_sample"), default="in_sample")
+    bt.add_argument("--scenarios", default="idealized,base,stress", help=f"Comma-separated: {','.join(backtest.SCENARIOS)}")
+    bt.add_argument("--confirm-out-of-sample", action="store_true",
+                    help="Required for --sample out_of_sample: the hold-out should be evaluated once, with frozen configs")
     return parser
 
 
@@ -76,6 +83,8 @@ def main(argv: list[str] | None = None) -> int:
         return _dataset(args)
     if args.command == "m2-quote-probe":
         return _quote_probe(args)
+    if args.command == "m2-backtest":
+        return _backtest(args)
     symbols = _symbols(args)
     if not symbols:
         print("error: provide --symbols or --symbols-file", file=sys.stderr)
@@ -146,6 +155,54 @@ def _quote_probe(args: argparse.Namespace) -> int:
     print(f"quote windows: {status} ({provider.request_count} API requests, 0 orders)")
     print(f"summary: {path}")
     return EXIT_BLOCKED if "entitlement_blocked" in status else EXIT_OK  # type: ignore[operator]
+
+
+def _backtest(args: argparse.Namespace) -> int:
+    dataset = Path(args.dataset)
+    matches = dataset / "breakout_matches.csv"
+    if not matches.is_file():
+        print(f"error: {matches} not found; build the dataset first", file=sys.stderr)
+        return EXIT_USAGE
+    if args.sample == "out_of_sample" and not args.confirm_out_of_sample:
+        print("error: out-of-sample runs need --confirm-out-of-sample (evaluate the hold-out once)", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        scenarios = [backtest.SCENARIOS[n] for n in args.scenarios.split(",")]
+        provider = AlpacaHistoricalProvider.from_env()
+    except KeyError as exc:
+        print(f"error: unknown scenario {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except AuthenticationError as exc:
+        print(f"error: {exc}. See .env.example.", file=sys.stderr)
+        return EXIT_USAGE
+    with matches.open(newline="", encoding="utf-8") as fh:
+        signals = backtest.signals_from_breakouts(csv.DictReader(fh), {args.sample})
+    store = backtest.QuoteStore(provider, dataset / "cache" / "backtest_quotes")
+    strat, risk = backtest.StrategyConfig(), backtest.RiskConfig()
+    summary: dict[str, object] = {
+        "dataset": str(dataset), "sample": args.sample, "code_sha": code_version(),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(), "feed": "sip", "orders_placed": 0,
+        "signals": len(signals), "config": backtest.config_record(strat, risk, scenarios), "results": {},
+        "caveats": "Simulated fills against historical SIP NBBO; not evidence of live or paper fill quality. "
+                   "No queue position, hidden liquidity, halts or venue rules. Survivorship bias as in the dataset report.",
+    }
+    try:
+        for cfg in scenarios:
+            res = backtest.run_backtest(signals, store, cfg, strat, risk)
+            out = dataset / "backtest" / args.sample / cfg.name  # per-trade rows are licensed-data derived: local only
+            backtest.write_rows(out / "trades.csv", res.trades)
+            backtest.write_rows(out / "attempts.csv", res.attempts)
+            summary["results"][cfg.name] = backtest.summarize(res)  # type: ignore[index]
+            s = summary["results"][cfg.name]["all"]  # type: ignore[index]
+            print(f"{cfg.name}: {s['trades']} trades, fill rate {s['fill_rate']}, net ${s['net_usd']:.2f}")
+    except (EntitlementError, AuthenticationError) as exc:
+        print(f"error: SIP quotes blocked: {exc}", file=sys.stderr)
+        return EXIT_BLOCKED
+    path = dataset / f"backtest_summary_{args.sample}.json"
+    path.write_text(json.dumps(summary, indent=2, default=str) + "
+", encoding="utf-8")
+    print(f"summary: {path} ({provider.request_count} API requests, 0 orders)")
+    return EXIT_OK
 
 
 if __name__ == "__main__":
