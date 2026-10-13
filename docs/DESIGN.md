@@ -34,16 +34,23 @@ Build a research-first, fully automated paper-trading platform inspired by small
 - Simulate limit orders, quote spreads, slippage, non-fills, partial fills, timeout and transaction costs.
 - Test walk-forward/out-of-sample; split premarket and after-hours performance.
 
-### M3 — Automated Alpaca PAPER execution
-- WebSocket feed, stateful scanner, independent risk manager, paper broker adapter and persistent journal.
+### M3 — Real-time News Scanner + automated Alpaca PAPER execution
+- Implement a read-only real-time news collector first, independently deployable from paper execution; start with Alpaca News REST/WebSocket using existing credentials, and verify entitlement, timeliness, ticker coverage and extended-hours availability empirically. Do not assume the feed is real time until tested.
+- Provider abstraction for optional paid news feeds later, chosen based on measured latency, coverage, license, reliability and cost; no premium membership or OpenAI key is required to start.
+- Normalize ticker(s), source, headline, article ID/version, provider published_at, local received_at, and alert/classified_at in UTC; deduplicate updates, handle reconnect/replay, and store a durable append-only journal.
+- Detect and tag candidate catalysts (FDA/regulatory, earnings, contracts, M&A, offerings/dilution, reverse splits, promotions and no-news momentum). Start with deterministic tags; optional AI structured classification may be added in M3 behind a feature flag, with confidence/unknown states and no trading authority.
+- Combine news with the SIP price/volume scanner for candidate alerts, including the stock's gap, volume, spread and price movement between publication and receipt. Record end-to-end alert latency and late-news cases. Never infer that a headline is bullish solely from positive wording.
+- News is advisory only: never directly place orders, override risk checks, or block independent price/volume strategies. Make alerts usable without paper execution.
+- Separately implement WebSocket market feed, stateful scanner, independent risk manager, paper broker adapter and persistent journal.
 - Persistent kill switch, idempotent client_order_id, restart reconciliation, order lifecycle, disconnect fail-safe.
 - Enforce **paper only** through configuration, credentials, endpoints, and tests; reject live modes.
+- Acceptance: offline tests for duplicate/out-of-order articles, timestamp correctness, reconnection, delayed news, missing ticker and stale feeds; documented measured news availability/latency, with zero live orders.
 
-### M4 — News and AI A/B testing
-- Pluggable news collection; deduplicate article/version; map ticker and publication/receipt times.
-- Optional OpenAI structured classification: catalyst, sentiment, materiality, dilution risk, evidence and uncertainty.
-- If AI is unavailable, news-required strategies fail closed; independent price/volume strategies can continue.
-- Compare AI-filtered and baseline strategies on matched periods with segregated accounting.
+### M4 — News/AI effectiveness evaluation and provider upgrades
+- Compare news-tagged, optionally AI-filtered and price/volume-only strategies over matched periods; account for publication versus actual receipt time, costs and non-fills.
+- Optional OpenAI structured classification: catalyst, sentiment, materiality, dilution risk, evidence and uncertainty; do not assume this improves returns.
+- If AI is unavailable, news-required experiments fail closed; independent price/volume strategies continue.
+- Evaluate paid news APIs only if M3 measured latency or coverage warrants the expense.
 
 ### M5 — Upgrade assessment
 Evaluate full real-time SIP, point-in-time float data and higher-quality low-latency news. Live-money execution is **outside scope** until a separately approved design.
@@ -101,7 +108,7 @@ Produce three labeled scenarios: idealized upper-bound reference; quote-aware ba
 - Target preliminary 200–300 trades plus out-of-sample validation; not a guarantee of significance.
 - Disclose survivorship, look-ahead, selection, corporate actions and data coverage caveats.
 
-## 8. AI integration (M4 only)
+## 8. Optional AI integration (M3 feature flag; evaluated in M4)
 
 - OpenAI Python SDK with configurable model and validated structured JSON.
 - Output fields: ticker, article_id, sentiment, catalyst_type, strength_0_to_10, dilution_risk, confidence, evidence, unknown_reason.
