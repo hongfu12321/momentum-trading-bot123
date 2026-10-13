@@ -1,0 +1,449 @@
+{
+  "dataset": "reports\\datasets\\m2_sip_20260603_20261009",
+  "sample": "out_of_sample",
+  "code_sha": "7f89c17",
+  "created_at_utc": "2026-10-13T20:55:42.316115+00:00",
+  "feed": "sip",
+  "orders_placed": 0,
+  "signals": 1488,
+  "config": {
+    "strategy": {
+      "stop_pct": 0.03,
+      "target_r": 2.0,
+      "max_hold": 900.0,
+      "entry_cutoff_before_close": 600.0,
+      "flatten_before_close": 120.0
+    },
+    "risk": {
+      "account_usd": 3000.0,
+      "risk_per_trade_usd": 15.0,
+      "max_notional_frac": 0.25,
+      "daily_loss_limit_usd": 45.0,
+      "max_entries_per_day": 5,
+      "max_consecutive_losses": 3
+    },
+    "scenarios": {
+      "idealized": {
+        "name": "idealized",
+        "latency": 0.0,
+        "max_quote_age_s": null,
+        "spread_cap_bps": null,
+        "entry_timeout": 10.0,
+        "limit_offset_bps": 20.0,
+        "size_share": null,
+        "price": "mid",
+        "adverse_bps": 0.0,
+        "fees": false
+      },
+      "base_cap50": {
+        "name": "base_cap50",
+        "latency": 0.5,
+        "max_quote_age_s": 3.0,
+        "spread_cap_bps": 50.0,
+        "entry_timeout": 10.0,
+        "limit_offset_bps": 20.0,
+        "size_share": 1.0,
+        "price": "touch",
+        "adverse_bps": 0.0,
+        "fees": true
+      },
+      "stress_cap50": {
+        "name": "stress_cap50",
+        "latency": 2.0,
+        "max_quote_age_s": 3.0,
+        "spread_cap_bps": 50.0,
+        "entry_timeout": 10.0,
+        "limit_offset_bps": 20.0,
+        "size_share": 0.5,
+        "price": "touch",
+        "adverse_bps": 10.0,
+        "fees": true
+      }
+    },
+    "fees": {
+      "sec_fee_per_dollar_sold": 2.78e-05,
+      "taf_per_share_sold": 0.000166,
+      "taf_max": 8.3,
+      "commission": 0.0
+    },
+    "excluded_samples": [
+      "embargo"
+    ]
+  },
+  "results": {
+    "idealized": {
+      "premarket": {
+        "signals": 705,
+        "skipped": {
+          "loss_streak_pause": 245,
+          "position_open": 29,
+          "daily_entry_limit": 281,
+          "daily_loss_limit": 19
+        },
+        "orders_simulated": 131,
+        "non_fills": {
+          "at_signal_locked_quote": 5,
+          "at_signal_no_quote": 4
+        },
+        "fill_rate": 0.9312977099236641,
+        "partial_fills": 0,
+        "median_seconds_to_fill": 0.0,
+        "median_entry_spread_bps": 59.946042573067984,
+        "median_entry_vs_signal_close_bps": -0.9950248756224189,
+        "trades": 122,
+        "win_rate": 0.2786885245901639,
+        "gross_usd": -99.56369999999856,
+        "fees_usd": 0.0,
+        "net_usd": -99.56369999999856,
+        "expectancy_usd": -0.8160959016393324,
+        "expectancy_r": -0.055037184615261615,
+        "expectancy_r_ci95_bootstrap": [
+          -0.290981418521554,
+          0.20340548977841494
+        ],
+        "profit_factor": 0.9151608692432696,
+        "avg_win_usd": 31.588088235294148,
+        "avg_loss_usd": -13.335894318181813,
+        "max_drawdown_usd": 333.11369999999914,
+        "exit_reasons": {
+          "stop": 86,
+          "target": 31,
+          "time": 5
+        },
+        "incomplete_exits": 0
+      },
+      "afterhours": {
+        "signals": 783,
+        "skipped": {
+          "loss_streak_pause": 319,
+          "daily_entry_limit": 433,
+          "daily_loss_limit": 31
+        },
+        "orders_simulated": 0,
+        "non_fills": {},
+        "fill_rate": null,
+        "partial_fills": 0,
+        "median_seconds_to_fill": null,
+        "median_entry_spread_bps": null,
+        "median_entry_vs_signal_close_bps": null,
+        "trades": 0,
+        "win_rate": null,
+        "gross_usd": 0,
+        "fees_usd": 0,
+        "net_usd": 0,
+        "expectancy_usd": null,
+        "expectancy_r": null,
+        "expectancy_r_ci95_bootstrap": null,
+        "profit_factor": null,
+        "avg_win_usd": null,
+        "avg_loss_usd": null,
+        "max_drawdown_usd": 0.0,
+        "exit_reasons": {},
+        "incomplete_exits": 0
+      },
+      "all": {
+        "signals": 1488,
+        "skipped": {
+          "loss_streak_pause": 564,
+          "position_open": 29,
+          "daily_entry_limit": 714,
+          "daily_loss_limit": 50
+        },
+        "orders_simulated": 131,
+        "non_fills": {
+          "at_signal_locked_quote": 5,
+          "at_signal_no_quote": 4
+        },
+        "fill_rate": 0.9312977099236641,
+        "partial_fills": 0,
+        "median_seconds_to_fill": 0.0,
+        "median_entry_spread_bps": 59.946042573067984,
+        "median_entry_vs_signal_close_bps": -0.9950248756224189,
+        "trades": 122,
+        "win_rate": 0.2786885245901639,
+        "gross_usd": -99.56369999999856,
+        "fees_usd": 0.0,
+        "net_usd": -99.56369999999856,
+        "expectancy_usd": -0.8160959016393324,
+        "expectancy_r": -0.055037184615261615,
+        "expectancy_r_ci95_bootstrap": [
+          -0.290981418521554,
+          0.20340548977841494
+        ],
+        "profit_factor": 0.9151608692432696,
+        "avg_win_usd": 31.588088235294148,
+        "avg_loss_usd": -13.335894318181813,
+        "max_drawdown_usd": 333.11369999999914,
+        "exit_reasons": {
+          "stop": 86,
+          "target": 31,
+          "time": 5
+        },
+        "incomplete_exits": 0
+      }
+    },
+    "base_cap50": {
+      "premarket": {
+        "signals": 705,
+        "skipped": {
+          "daily_loss_limit": 125,
+          "position_open": 36,
+          "daily_entry_limit": 104,
+          "loss_streak_pause": 61,
+          "after_entry_cutoff": 7
+        },
+        "orders_simulated": 372,
+        "non_fills": {
+          "at_signal_spread_above_cap": 237,
+          "at_signal_no_quote": 17,
+          "at_signal_locked_quote": 8,
+          "timeout_spread_above_cap": 3,
+          "timeout_price_above_limit": 2
+        },
+        "fill_rate": 0.28225806451612906,
+        "partial_fills": 0,
+        "median_seconds_to_fill": 0.5,
+        "median_entry_spread_bps": 32.733224222586685,
+        "median_entry_vs_signal_close_bps": 11.402508551880963,
+        "trades": 105,
+        "win_rate": 0.2761904761904762,
+        "gross_usd": -383.06000000000034,
+        "fees_usd": 3.593370678,
+        "net_usd": -386.65337067800033,
+        "expectancy_usd": -3.6824130540761937,
+        "expectancy_r": -0.24661508787018177,
+        "expectancy_r_ci95_bootstrap": [
+          -0.5067474996034265,
+          0.018114979109618814
+        ],
+        "profit_factor": 0.6834597886593562,
+        "avg_win_usd": 28.787760611103447,
+        "avg_loss_usd": -16.07234774210527,
+        "max_drawdown_usd": 453.1377970980001,
+        "exit_reasons": {
+          "stop": 73,
+          "target": 26,
+          "time": 6
+        },
+        "incomplete_exits": 1
+      },
+      "afterhours": {
+        "signals": 783,
+        "skipped": {
+          "daily_loss_limit": 308,
+          "daily_entry_limit": 314,
+          "position_open": 4,
+          "loss_streak_pause": 92,
+          "after_entry_cutoff": 1
+        },
+        "orders_simulated": 64,
+        "non_fills": {
+          "at_signal_spread_above_cap": 37,
+          "at_signal_no_quote": 14,
+          "timeout_spread_above_cap": 1
+        },
+        "fill_rate": 0.1875,
+        "partial_fills": 0,
+        "median_seconds_to_fill": 0.5903510000000001,
+        "median_entry_spread_bps": 41.419230356950564,
+        "median_entry_vs_signal_close_bps": 0.3921876225587706,
+        "trades": 12,
+        "win_rate": 0.4166666666666667,
+        "gross_usd": 66.48000000000002,
+        "fees_usd": 0.502583426,
+        "net_usd": 65.97741657400003,
+        "expectancy_usd": 5.498118047833336,
+        "expectancy_r": 0.36926751308960165,
+        "expectancy_r_ci95_bootstrap": [
+          -0.45764136678033046,
+          1.2798121237353128
+        ],
+        "profit_factor": 1.7340961061834381,
+        "avg_win_usd": 31.170627446000008,
+        "avg_loss_usd": -12.839388665142861,
+        "max_drawdown_usd": 47.98821916599998,
+        "exit_reasons": {
+          "target": 5,
+          "stop": 6,
+          "time": 1
+        },
+        "incomplete_exits": 0
+      },
+      "all": {
+        "signals": 1488,
+        "skipped": {
+          "daily_loss_limit": 433,
+          "position_open": 40,
+          "daily_entry_limit": 418,
+          "loss_streak_pause": 153,
+          "after_entry_cutoff": 8
+        },
+        "orders_simulated": 436,
+        "non_fills": {
+          "at_signal_spread_above_cap": 274,
+          "at_signal_no_quote": 31,
+          "timeout_spread_above_cap": 4,
+          "at_signal_locked_quote": 8,
+          "timeout_price_above_limit": 2
+        },
+        "fill_rate": 0.268348623853211,
+        "partial_fills": 0,
+        "median_seconds_to_fill": 0.5,
+        "median_entry_spread_bps": 33.500837520938795,
+        "median_entry_vs_signal_close_bps": 9.3545369504211,
+        "trades": 117,
+        "win_rate": 0.2905982905982906,
+        "gross_usd": -316.5800000000003,
+        "fees_usd": 4.095954104,
+        "net_usd": -320.6759541040003,
+        "expectancy_usd": -2.7408201205470113,
+        "expectancy_r": -0.18344764161789628,
+        "expectancy_r_ci95_bootstrap": [
+          -0.43305246744315135,
+          0.07933645127021505
+        ],
+        "profit_factor": 0.7554657041738694,
+        "avg_win_usd": 29.13818220447059,
+        "avg_loss_usd": -15.799688542843377,
+        "max_drawdown_usd": 425.9776319360002,
+        "exit_reasons": {
+          "stop": 79,
+          "target": 31,
+          "time": 7
+        },
+        "incomplete_exits": 1
+      }
+    },
+    "stress_cap50": {
+      "premarket": {
+        "signals": 705,
+        "skipped": {
+          "daily_loss_limit": 146,
+          "position_open": 37,
+          "daily_entry_limit": 126,
+          "after_entry_cutoff": 7
+        },
+        "orders_simulated": 389,
+        "non_fills": {
+          "at_signal_spread_above_cap": 246,
+          "at_signal_no_quote": 19,
+          "at_signal_locked_quote": 7,
+          "timeout_spread_above_cap": 7,
+          "timeout_price_above_limit": 6
+        },
+        "fill_rate": 0.26735218508997427,
+        "partial_fills": 0,
+        "median_seconds_to_fill": 2.0,
+        "median_entry_spread_bps": 33.061102929323035,
+        "median_entry_vs_signal_close_bps": 9.999999999998899,
+        "trades": 104,
+        "win_rate": 0.27884615384615385,
+        "gross_usd": -572.650739999994,
+        "fees_usd": 3.592919977606,
+        "net_usd": -576.2436599776,
+        "expectancy_usd": -5.540804422861539,
+        "expectancy_r": -0.3724566662622977,
+        "expectancy_r_ci95_bootstrap": [
+          -0.6408738817308995,
+          -0.09690665991812361
+        ],
+        "profit_factor": 0.575538077347673,
+        "avg_win_usd": 26.942847130487095,
+        "avg_loss_usd": -18.101149690156344,
+        "max_drawdown_usd": 643.7039500464824,
+        "exit_reasons": {
+          "stop": 72,
+          "target": 26,
+          "time": 6
+        },
+        "incomplete_exits": 1
+      },
+      "afterhours": {
+        "signals": 783,
+        "skipped": {
+          "daily_loss_limit": 339,
+          "daily_entry_limit": 350,
+          "position_open": 3,
+          "after_entry_cutoff": 1
+        },
+        "orders_simulated": 90,
+        "non_fills": {
+          "at_signal_spread_above_cap": 57,
+          "at_signal_no_quote": 17,
+          "timeout_spread_above_cap": 1,
+          "timeout_price_above_limit": 1
+        },
+        "fill_rate": 0.15555555555555556,
+        "partial_fills": 0,
+        "median_seconds_to_fill": 2.0179985,
+        "median_entry_spread_bps": 40.85461177696631,
+        "median_entry_vs_signal_close_bps": 9.999999999998899,
+        "trades": 14,
+        "win_rate": 0.2857142857142857,
+        "gross_usd": -71.61267999999939,
+        "fees_usd": 0.595045639168,
+        "net_usd": -72.20772563916739,
+        "expectancy_usd": -5.157694688511957,
+        "expectancy_r": -0.34951120840620514,
+        "expectancy_r_ci95_bootstrap": [
+          -0.9525507514727989,
+          0.37010931762794336
+        ],
+        "profit_factor": 0.5524370944790655,
+        "avg_win_usd": 22.281910352140052,
+        "avg_loss_usd": -16.13353670477276,
+        "max_drawdown_usd": 118.80072347441549,
+        "exit_reasons": {
+          "target": 3,
+          "stop": 9,
+          "time": 2
+        },
+        "incomplete_exits": 0
+      },
+      "all": {
+        "signals": 1488,
+        "skipped": {
+          "daily_loss_limit": 485,
+          "position_open": 40,
+          "daily_entry_limit": 476,
+          "after_entry_cutoff": 8
+        },
+        "orders_simulated": 479,
+        "non_fills": {
+          "at_signal_spread_above_cap": 303,
+          "at_signal_no_quote": 36,
+          "timeout_spread_above_cap": 8,
+          "at_signal_locked_quote": 7,
+          "timeout_price_above_limit": 7
+        },
+        "fill_rate": 0.24634655532359082,
+        "partial_fills": 0,
+        "median_seconds_to_fill": 2.0,
+        "median_entry_spread_bps": 33.89840246596517,
+        "median_entry_vs_signal_close_bps": 9.999999999998899,
+        "trades": 118,
+        "win_rate": 0.2796610169491525,
+        "gross_usd": -644.2634199999934,
+        "fees_usd": 4.187965616774,
+        "net_usd": -648.4513856167674,
+        "expectancy_usd": -5.495350725565825,
+        "expectancy_r": -0.36973432380479515,
+        "expectancy_r_ci95_bootstrap": [
+          -0.603019860481913,
+          -0.11063908921998125
+        ],
+        "profit_factor": 0.5730843591534885,
+        "avg_win_usd": 26.37788509674806,
+        "avg_loss_usd": -17.869665809522978,
+        "max_drawdown_usd": 721.1933587044133,
+        "exit_reasons": {
+          "stop": 81,
+          "target": 29,
+          "time": 8
+        },
+        "incomplete_exits": 1
+      }
+    }
+  },
+  "caveats": "Simulated fills against historical SIP NBBO; not evidence of live or paper fill quality. No queue position, hidden liquidity, halts or venue rules. Survivorship bias as in the dataset report."
+}
