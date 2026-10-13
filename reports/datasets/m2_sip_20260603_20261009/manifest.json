@@ -1,0 +1,386 @@
+{
+  "milestone": "M1-B dataset",
+  "status": "complete",
+  "created_at_utc": "2026-10-13T20:04:22.545725+00:00",
+  "as_of_utc": "2026-10-13T19:48:22.545725+00:00",
+  "code_sha": "e869a3c",
+  "start_date": "2026-06-03",
+  "end_date": "2026-10-09",
+  "trading_days": [
+    "2026-06-03",
+    "2026-06-04",
+    "2026-06-05",
+    "2026-06-08",
+    "2026-06-09",
+    "2026-06-10",
+    "2026-06-11",
+    "2026-06-12",
+    "2026-06-15",
+    "2026-06-16",
+    "2026-06-17",
+    "2026-06-18",
+    "2026-06-22",
+    "2026-06-23",
+    "2026-06-24",
+    "2026-06-25",
+    "2026-06-26",
+    "2026-06-29",
+    "2026-06-30",
+    "2026-07-01",
+    "2026-07-02",
+    "2026-07-06",
+    "2026-07-07",
+    "2026-07-08",
+    "2026-07-09",
+    "2026-07-10",
+    "2026-07-13",
+    "2026-07-14",
+    "2026-07-15",
+    "2026-07-16",
+    "2026-07-17",
+    "2026-07-20",
+    "2026-07-21",
+    "2026-07-22",
+    "2026-07-23",
+    "2026-07-24",
+    "2026-07-27",
+    "2026-07-28",
+    "2026-07-29",
+    "2026-07-30",
+    "2026-07-31",
+    "2026-08-03",
+    "2026-08-04",
+    "2026-08-05",
+    "2026-08-06",
+    "2026-08-07",
+    "2026-08-10",
+    "2026-08-11",
+    "2026-08-12",
+    "2026-08-13",
+    "2026-08-14",
+    "2026-08-17",
+    "2026-08-18",
+    "2026-08-19",
+    "2026-08-20",
+    "2026-08-21",
+    "2026-08-24",
+    "2026-08-25",
+    "2026-08-26",
+    "2026-08-27",
+    "2026-08-28",
+    "2026-08-31",
+    "2026-09-01",
+    "2026-09-02",
+    "2026-09-03",
+    "2026-09-04",
+    "2026-09-08",
+    "2026-09-09",
+    "2026-09-10",
+    "2026-09-11",
+    "2026-09-14",
+    "2026-09-15",
+    "2026-09-16",
+    "2026-09-17",
+    "2026-09-18",
+    "2026-09-21",
+    "2026-09-22",
+    "2026-09-23",
+    "2026-09-24",
+    "2026-09-25",
+    "2026-09-28",
+    "2026-09-29",
+    "2026-09-30",
+    "2026-10-01",
+    "2026-10-02",
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09"
+  ],
+  "reference_day": "2026-06-02",
+  "feeds": [
+    "sip",
+    "iex"
+  ],
+  "timeframe": "1Min",
+  "adjustment": "raw",
+  "reference_close": "SIP 1Day bar close (regular-session official close), split-adjusted on ex-dates",
+  "scan_params": {
+    "min_price": 1.0,
+    "max_price": 20.0,
+    "premarket_min_change": 0.1,
+    "afterhours_min_change": 0.05,
+    "min_session_volume": 100000,
+    "breakout_volume_multiple": 2.0,
+    "breakout_lookback": 5,
+    "exclude_closing_auction_bar": true
+  },
+  "symbol_chunk": 1000,
+  "inputs": {
+    "nasdaqlisted_sha256": "ae134a6076a8bd2b0f9cd47ecdc967a689518d634ff6d591eb3653b54f03cacc",
+    "nasdaqlisted_file_creation_time": "1013202614:01",
+    "otherlisted_sha256": "7e5b17573c27e4fec527c1478890b8c1fb1db1de8e68a1b61a35b5a8f2cad074",
+    "otherlisted_file_creation_time": "1013202614:01",
+    "corporate_actions_range": [
+      "2026-06-02",
+      "2026-10-13"
+    ],
+    "corporate_actions_downloaded_at_utc": "2026-10-13T18:27:08.639989+00:00",
+    "corporate_actions_sha256": "b4cd29dc2bc4e77dc39f16efba9c2b9b5763236617af261fa0ab1378df86a45c",
+    "corporate_actions_counts": {
+      "cash_mergers": 198,
+      "forward_splits": 83,
+      "name_changes": 242,
+      "reverse_splits": 456,
+      "stock_mergers": 72,
+      "worthless_removals": 114
+    },
+    "alpaca_assets_downloaded_at_utc": "2026-10-13T18:27:08.639989+00:00",
+    "alpaca_assets_sha256": "6cf574da1cd0f5ec9e66a0a1c003b3aee901ebab2114395a75c19a2174fe8640",
+    "alpaca_assets_counts": {
+      "active": 14387,
+      "inactive": 19170
+    }
+  },
+  "chronological_split": {
+    "oos_fraction": 0.3333333333333333,
+    "embargo_days": 1,
+    "in_sample": {
+      "days": 59,
+      "first": "2026-06-03",
+      "last": "2026-08-26"
+    },
+    "embargo": {
+      "days": 1,
+      "first": "2026-08-27",
+      "last": "2026-08-27"
+    },
+    "out_of_sample": {
+      "days": 30,
+      "first": "2026-08-28",
+      "last": "2026-10-09"
+    }
+  },
+  "profitability": "not evaluated: no transaction costs, spreads or non-fills are modelled yet",
+  "failed_sessions": [],
+  "api_requests_this_run": 0,
+  "cached_fetches_reused": 361,
+  "summary": {
+    "universe_by_origin": {
+      "current_listing": 5897,
+      "delisted": 326,
+      "renamed_to": 94,
+      "alpaca_otc": 975,
+      "alpaca_inactive": 16062
+    },
+    "renames_in_window": 95,
+    "premarket": {
+      "days": 90,
+      "mean_eligible_symbols": 3416.1444444444446,
+      "sip_bars": 4056277,
+      "iex_bars": 76513,
+      "sip_volume": 86648382358,
+      "iex_volume": 110126514,
+      "iex_volume_share": 0.0012709586838562871,
+      "candidates": {
+        "both": 148,
+        "sip_only": 2161,
+        "iex_only": 0,
+        "sip_total": 2309,
+        "iex_recall_of_sip": 0.06409701169337376
+      },
+      "gated_breakouts": {
+        "both": 32,
+        "sip_only": 2318,
+        "iex_only": 42,
+        "sip_total": 2350,
+        "iex_recall_of_sip": 0.013617021276595745
+      },
+      "ungated_breakouts_sip": 21513,
+      "sip_candidates_non_current_origin": 69,
+      "sip_candidates_by_origin": {
+        "current_listing": 2240,
+        "renamed_to": 56,
+        "alpaca_otc": 13
+      },
+      "by_sample": {
+        "in_sample": {
+          "days": 59,
+          "candidates": {
+            "both": 102,
+            "sip_only": 1550,
+            "iex_only": 0,
+            "sip_total": 1652,
+            "iex_recall_of_sip": 0.06174334140435835
+          },
+          "gated_breakouts": {
+            "both": 18,
+            "sip_only": 1604,
+            "iex_only": 24,
+            "sip_total": 1622,
+            "iex_recall_of_sip": 0.011097410604192354
+          }
+        },
+        "embargo": {
+          "days": 1,
+          "candidates": {
+            "both": 1,
+            "sip_only": 25,
+            "iex_only": 0,
+            "sip_total": 26,
+            "iex_recall_of_sip": 0.038461538461538464
+          },
+          "gated_breakouts": {
+            "both": 0,
+            "sip_only": 23,
+            "iex_only": 0,
+            "sip_total": 23,
+            "iex_recall_of_sip": 0.0
+          }
+        },
+        "out_of_sample": {
+          "days": 30,
+          "candidates": {
+            "both": 45,
+            "sip_only": 586,
+            "iex_only": 0,
+            "sip_total": 631,
+            "iex_recall_of_sip": 0.07131537242472266
+          },
+          "gated_breakouts": {
+            "both": 14,
+            "sip_only": 691,
+            "iex_only": 18,
+            "sip_total": 705,
+            "iex_recall_of_sip": 0.019858156028368795
+          }
+        }
+      },
+      "sip_candidates_split_adjusted": 8,
+      "sip_candidate_post_trigger_sip_coverage": {
+        "n": 2309,
+        "median": 0.9664429530201343,
+        "p25": 0.7423076923076923,
+        "p75": 1.0
+      },
+      "sip_candidate_post_trigger_iex_coverage": {
+        "n": 2309,
+        "median": 0.009523809523809525,
+        "p25": 0.0,
+        "p75": 0.13815789473684212
+      },
+      "sip_candidate_post_trigger_max_gap_minutes": {
+        "n": 2309,
+        "median": 1.0,
+        "p25": 0.0,
+        "p75": 5.0
+      }
+    },
+    "afterhours": {
+      "days": 90,
+      "mean_eligible_symbols": 3470.766666666667,
+      "sip_bars": 3028505,
+      "iex_bars": 14352,
+      "sip_volume": 33094422678,
+      "iex_volume": 19367839,
+      "iex_volume_share": 0.000585229698322402,
+      "candidates": {
+        "both": 18,
+        "sip_only": 1860,
+        "iex_only": 0,
+        "sip_total": 1878,
+        "iex_recall_of_sip": 0.009584664536741214
+      },
+      "gated_breakouts": {
+        "both": 4,
+        "sip_only": 2330,
+        "iex_only": 1,
+        "sip_total": 2334,
+        "iex_recall_of_sip": 0.001713796058269066
+      },
+      "ungated_breakouts_sip": 14180,
+      "sip_candidates_non_current_origin": 68,
+      "sip_candidates_by_origin": {
+        "current_listing": 1810,
+        "alpaca_otc": 14,
+        "renamed_to": 52,
+        "delisted": 2
+      },
+      "by_sample": {
+        "in_sample": {
+          "days": 59,
+          "candidates": {
+            "both": 8,
+            "sip_only": 1273,
+            "iex_only": 0,
+            "sip_total": 1281,
+            "iex_recall_of_sip": 0.00624512099921936
+          },
+          "gated_breakouts": {
+            "both": 0,
+            "sip_only": 1537,
+            "iex_only": 1,
+            "sip_total": 1537,
+            "iex_recall_of_sip": 0.0
+          }
+        },
+        "embargo": {
+          "days": 1,
+          "candidates": {
+            "both": 0,
+            "sip_only": 21,
+            "iex_only": 0,
+            "sip_total": 21,
+            "iex_recall_of_sip": 0.0
+          },
+          "gated_breakouts": {
+            "both": 0,
+            "sip_only": 14,
+            "iex_only": 0,
+            "sip_total": 14,
+            "iex_recall_of_sip": 0.0
+          }
+        },
+        "out_of_sample": {
+          "days": 30,
+          "candidates": {
+            "both": 10,
+            "sip_only": 566,
+            "iex_only": 0,
+            "sip_total": 576,
+            "iex_recall_of_sip": 0.017361111111111112
+          },
+          "gated_breakouts": {
+            "both": 4,
+            "sip_only": 779,
+            "iex_only": 0,
+            "sip_total": 783,
+            "iex_recall_of_sip": 0.005108556832694764
+          }
+        }
+      },
+      "sip_candidates_split_adjusted": 0,
+      "sip_candidate_post_trigger_sip_coverage": {
+        "n": 1878,
+        "median": 0.7894736842105263,
+        "p25": 0.5,
+        "p75": 0.9785407725321889
+      },
+      "sip_candidate_post_trigger_iex_coverage": {
+        "n": 1878,
+        "median": 0.0,
+        "p25": 0.0,
+        "p75": 0.0
+      },
+      "sip_candidate_post_trigger_max_gap_minutes": {
+        "n": 1878,
+        "median": 4.0,
+        "p25": 1.0,
+        "p75": 11.0
+      }
+    }
+  },
+  "orders_placed": 0,
+  "candidate_rows": 4187
+}

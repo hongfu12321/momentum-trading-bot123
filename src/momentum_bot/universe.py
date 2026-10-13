@@ -8,9 +8,13 @@ There is no free point-in-time US listing history, so the universe is reconstruc
    (cash/stock-merger acquirees, worthless removals, pre-rename symbols).
 3. Renames: Alpaca serves a renamed ticker's whole history under the new symbol, so on each
    date exactly one of (old, new) is used: old before the rename's process date, new on/after.
+4. Optionally add every Alpaca asset that is inactive, or active on OTC, from a read-only
+   /v2/assets snapshot. This recovers compliance delistings with no corporate-action record.
+   Assets carry no delisting date; eligibility still requires a prior-day SIP bar, and SIP
+   carries no OTC trades, so a symbol only counts on days it actually traded on an exchange.
 
-Residual bias: exchange delistings with no corporate action (e.g. compliance delistings to OTC)
-are not recoverable from these sources and are missing. Classification uses today's names.
+Residual bias: issues Alpaca never carried, renames missing from corporate actions (mitigated
+by de-duplicating identical daily series), and classification by today's names.
 """
 
 from __future__ import annotations
@@ -29,6 +33,9 @@ DIRECTORY_FILES = ("nasdaqlisted", "otherlisted")
 DIRECTORY_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/{name}.txt"
 DELISTING_TYPES = ("cash_mergers", "stock_mergers", "worthless_removals")
 SPLIT_TYPES = ("forward_splits", "reverse_splits")
+# Asset names give the only security-type hint for Alpaca-sourced symbols (no ETF flag there).
+FUND_NAME = re.compile(r"\b(etf|etn|fund|ishares|proshares|direxion|spdr|invesco|vaneck|exchange[- ]traded)\b", re.IGNORECASE)
+ORIGIN_RANK = {"current_listing": 0, "renamed_to": 1, "delisted": 1, "alpaca_inactive": 2, "alpaca_otc": 2}
 CORPORATE_ACTION_TYPES = "cash_merger,stock_merger,worthless_removal,name_change,forward_split,reverse_split"
 
 
@@ -89,11 +96,15 @@ class Split:
 
 @dataclass(slots=True)
 class Universe:
-    origin: dict[str, str]  # symbol -> current_listing | delisted:<type>@date | renamed_to:<new>@date
+    # symbol -> current_listing | delisted:<type>@date | renamed_to:<new>@date | alpaca_inactive:<exch> | alpaca_otc
+    origin: dict[str, str]
     listings: dict[str, Listing]
     delisted_on: dict[str, date] = field(default_factory=dict)
     renames: list[tuple[str, str, date]] = field(default_factory=list)  # (old, new, process_date)
     splits: dict[tuple[str, date], Split] = field(default_factory=dict)
+
+    def rank(self, symbol: str) -> int:
+        return ORIGIN_RANK[self.origin[symbol].split(":")[0]]
 
     def symbols_for(self, d: date) -> list[str]:
         hidden = {new for old, new, p in self.renames if d < p and old in self.origin}
@@ -103,7 +114,10 @@ class Universe:
         return sorted(s for s in self.origin if s not in hidden)
 
 
-def build_universe(listings: Iterable[Listing], actions: Mapping[str, list[dict]], start: date) -> Universe:
+def build_universe(
+    listings: Iterable[Listing], actions: Mapping[str, list[dict]], start: date,
+    assets: Iterable[Mapping[str, object]] = (),
+) -> Universe:
     listed = {x.symbol: x for x in listings if x.common_like and _plain(x.symbol)}
     origin = {s: "current_listing" for s in listed}
     uni = Universe(origin, listed)
@@ -119,6 +133,14 @@ def build_universe(listings: Iterable[Listing], actions: Mapping[str, list[dict]
         if _plain(old) and _plain(new) and old != new and p > start and (new in origin):
             origin.setdefault(old, f"renamed_to:{new}@{p}")
             uni.renames.append((old, new, p))
+    for a in assets:
+        sym, name = str(a.get("symbol", "")), str(a.get("name", ""))
+        if not _plain(sym) or sym in origin or NON_COMMON.search(name) or FUND_NAME.search(name):
+            continue
+        if a.get("status") == "inactive":
+            origin[sym] = f"alpaca_inactive:{a.get('exchange')}"
+        elif a.get("exchange") == "OTC":
+            origin[sym] = "alpaca_otc"
     for kind in SPLIT_TYPES:
         for a in actions.get(kind, []):
             if a.get("symbol") in origin and a.get("old_rate") and a.get("new_rate"):

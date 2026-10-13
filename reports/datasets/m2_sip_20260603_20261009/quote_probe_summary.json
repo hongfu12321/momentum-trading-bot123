@@ -1,0 +1,139 @@
+{
+  "dataset": "reports\\datasets\\m2_sip_20260603_20261009",
+  "sample": 60,
+  "seed": 20261013,
+  "code_sha": "e869a3c",
+  "created_at_utc": "2026-10-13T20:09:54.937704+00:00",
+  "feed": "sip",
+  "orders_placed": 0,
+  "window_minutes_after_trigger": 30,
+  "spread_cap_bps": 50.0,
+  "max_quote_age_seconds": 3.0,
+  "window_starts_at": "trigger bar completion (signal available), not trigger bar start",
+  "status_counts": {
+    "cached": 60
+  },
+  "errors": [],
+  "by_session": {
+    "premarket": {
+      "windows": 30,
+      "windows_with_any_quote": 30,
+      "quotes_per_window": {
+        "n": 30,
+        "median": 6851.0,
+        "p10": 283.0,
+        "p90": 28392.0
+      },
+      "minute_coverage": {
+        "n": 30,
+        "median": 1.0,
+        "p10": 0.8333333333333334,
+        "p90": 1.0
+      },
+      "median_spread_bps": {
+        "n": 30,
+        "median": 84.00791562159071,
+        "p10": 27.757019323155074,
+        "p90": 147.058823529413
+      },
+      "fresh_quote_time_share": {
+        "n": 30,
+        "median": 0.8760679483333345,
+        "p10": 0.14891257722222218,
+        "p90": 0.995954013333335
+      },
+      "executable_time_share": {
+        "n": 30,
+        "median": 0.8633898341666675,
+        "p10": 0.14891257722222218,
+        "p90": 0.9894316448275876
+      },
+      "time_weighted_spread_bps": {
+        "n": 30,
+        "median": 95.96163796126726,
+        "p10": 41.62619042338938,
+        "p90": 147.61752799956204
+      },
+      "time_share_within_spread_cap": {
+        "n": 30,
+        "median": 0.09025819555555552,
+        "p10": 0.0,
+        "p90": 0.6511074016666634
+      },
+      "windows_never_within_spread_cap": 7,
+      "max_gap_seconds": {
+        "n": 30,
+        "median": 19.877454,
+        "p10": 4.918629,
+        "p90": 170.257249
+      },
+      "crossed_share": 0.003984922253417321,
+      "locked_share": 0.03513352300230788,
+      "one_sided_share": 0.0
+    },
+    "afterhours": {
+      "windows": 30,
+      "windows_with_any_quote": 30,
+      "quotes_per_window": {
+        "n": 30,
+        "median": 3029.5,
+        "p10": 233.0,
+        "p90": 22764.0
+      },
+      "minute_coverage": {
+        "n": 30,
+        "median": 1.0,
+        "p10": 0.9,
+        "p90": 1.0
+      },
+      "median_spread_bps": {
+        "n": 30,
+        "median": 88.11256671518589,
+        "p10": 52.770448548812716,
+        "p90": 268.3178534571721
+      },
+      "fresh_quote_time_share": {
+        "n": 30,
+        "median": 0.6643175988888874,
+        "p10": 0.1552758549999999,
+        "p90": 0.9994988977778945
+      },
+      "executable_time_share": {
+        "n": 30,
+        "median": 0.6635962666666655,
+        "p10": 0.1552758549999999,
+        "p90": 0.99779440055558
+      },
+      "time_weighted_spread_bps": {
+        "n": 30,
+        "median": 108.44213574788105,
+        "p10": 60.35963484418353,
+        "p90": 251.73862935036087
+      },
+      "time_share_within_spread_cap": {
+        "n": 30,
+        "median": 0.02520509444444445,
+        "p10": 0.0,
+        "p90": 0.3635659638888901
+      },
+      "windows_never_within_spread_cap": 12,
+      "max_gap_seconds": {
+        "n": 30,
+        "median": 25.532154,
+        "p10": 3.366871,
+        "p90": 171.161527
+      },
+      "crossed_share": 0.0018857493392304022,
+      "locked_share": 0.023935384685291914,
+      "one_sided_share": 0.0
+    }
+  },
+  "extrapolation_to_all_candidates": {
+    "candidates": 4187,
+    "mean_quotes_per_window": 9738.216666666667,
+    "estimated_quotes": 40773913,
+    "estimated_requests": 6978,
+    "estimated_hours_at_measured_rate": 1.84,
+    "estimated_raw_json_gb": 4.63
+  }
+}

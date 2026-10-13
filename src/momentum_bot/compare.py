@@ -48,6 +48,10 @@ class Event:
     cumulative_volume: int
     candidate_gate: bool  # scan rules held at this bar
 
+    def __post_init__(self) -> None:
+        if self.observed_at_utc < self.bar_start_utc + BAR_LENGTH:
+            raise ValueError("an event cannot be observed before its bar completes")
+
     def row(self) -> dict[str, object]:
         return asdict(self)
 
@@ -194,6 +198,9 @@ def match_events(sip: list[Event], iex: list[Event], *, by_minute: bool) -> list
             "match": status,
             "sip_bar_start_utc": s.bar_start_utc.isoformat() if s else None,
             "iex_bar_start_utc": i.bar_start_utc.isoformat() if i else None,
+            "sip_signal_available_utc": s.observed_at_utc.isoformat() if s else None,
+            "iex_signal_available_utc": i.observed_at_utc.isoformat() if i else None,
+            "sip_price": s.price if s else None,
             "iex_lag_minutes": lag,
             "sip_candidate_gate": s.candidate_gate if s else None,
             "iex_candidate_gate": i.candidate_gate if i else None,
