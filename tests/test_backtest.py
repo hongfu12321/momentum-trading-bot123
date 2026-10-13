@@ -124,3 +124,39 @@ def test_cli_requires_explicit_confirmation_for_out_of_sample(tmp_path, capsys) 
     (tmp_path / "breakout_matches.csv").write_text("kind\n", encoding="utf-8")
     assert main(["m2-backtest", "--dataset", str(tmp_path), "--sample", "out_of_sample"]) == EXIT_USAGE
     assert "--confirm-out-of-sample" in capsys.readouterr().err
+
+
+class RawSource:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows, self.request_count, self.bytes_received = rows, 0, 0
+
+    def iter_quotes(self, symbol, feed, start, end):  # noqa: ANN001, ANN201
+        self.request_count += 1
+        yield from self.rows
+
+
+def test_quote_store_sorts_dedupes_clips_and_caches(tmp_path) -> None:  # noqa: ANN001
+    from momentum_bot.backtest import QuoteStore
+
+    def raw(sec: float, bid: float) -> dict:
+        t = AVAIL + timedelta(seconds=sec)
+        return {"t": t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "001Z", "bp": bid, "ap": bid + 0.01, "bs": 100, "as": 100}
+
+    src = RawSource([raw(5, 5.02), raw(1, 5.00), raw(1, 5.00), raw(-10, 4.0), raw(40, 6.0)])
+    store = QuoteStore(src, tmp_path)
+    got = store.get(sig(), AVAIL - timedelta(seconds=3), AVAIL + timedelta(seconds=30))
+    assert [(q.t - AVAIL).total_seconds() for q in got] == [1.0, 5.0]
+    assert store.get(sig(), AVAIL - timedelta(seconds=3), AVAIL + timedelta(seconds=30)) == got
+    assert src.request_count == 1  # second read comes from the local cache
+
+
+def test_spread_cap_variants_and_in_sample_selection_rule() -> None:
+    from momentum_bot.backtest import select_spread_cap, with_spread_caps
+
+    names = [c.name for c in with_spread_caps(SCENARIOS.values(), [50, 100])]
+    assert names == ["idealized", "base_cap50", "base_cap100", "stress_cap50", "stress_cap100"]
+    res = {"base_cap50": {"all": {"trades": 10, "expectancy_r": 0.9}},  # too few trades to be chosen
+           "base_cap100": {"all": {"trades": 40, "expectancy_r": -0.1}},
+           "base_cap150": {"all": {"trades": 60, "expectancy_r": -0.1}}}
+    assert select_spread_cap(res, [50, 100, 150])["selected_spread_cap_bps"] == 100  # tie goes to the tighter cap
+    assert select_spread_cap({}, [50])["selected_spread_cap_bps"] is None

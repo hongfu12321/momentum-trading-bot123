@@ -125,8 +125,9 @@ class FakeQuotes:
             raise EntitlementError("subscription does not permit querying recent SIP data", status=403, feed=feed)
         assert feed == "sip"
         self.bytes_received += 300
-        yield q(1, 2.0, 2.02)
-        yield q(61, 2.0, 2.04)
+        offset = (start - T0).total_seconds()  # quotes inside the requested window
+        yield q(offset + 1, 2.0, 2.02)
+        yield q(offset + 61, 2.0, 2.04)
 
 
 def cand(symbol: str, session: str, trigger: str) -> dict[str, str]:
@@ -164,3 +165,13 @@ def test_signals_become_available_only_when_the_trigger_bar_completes() -> None:
     assert quotes.signal_available_utc(explicit) == T0 + timedelta(minutes=1)
     with pytest.raises(ValueError, match="completes"):
         Event("breakout", "sip", "X", T0.date(), "premarket", T0, T0 + timedelta(seconds=59), 2.0, 0.2, 1, True)
+
+
+def test_quote_hygiene_sorts_dedupes_and_clips_to_window() -> None:
+    end = T0 + timedelta(seconds=60)
+    rows = [q(20, 10.0, 10.5), q(0, 10.0, 10.02), q(0, 10.0, 10.02), q(-1, 9.0, 9.01), q(60, 9.0, 9.01)]
+    clean = quotes.clean_quotes(rows, T0, end)
+    assert [r["t"] for r in clean] == [q(0, 1, 1)["t"], q(20, 1, 1)["t"]]  # sorted, deduped, [start, end)
+    # Out-of-order, duplicated and out-of-window rows give the same statistics as the clean stream.
+    assert quotes.summarize_quotes(rows, T0, end) == quotes.summarize_quotes(clean, T0, end)
+    assert quotes.summarize_quotes(rows, T0, end)["quotes"] == 2

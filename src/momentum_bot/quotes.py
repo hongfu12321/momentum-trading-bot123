@@ -83,6 +83,20 @@ def spread_bps(bid: float, ask: float) -> float:
     return (ask - bid) / ((ask + bid) / 2) * 10_000
 
 
+def clean_quotes(rows: Iterable[Mapping[str, object]], start: datetime, end: datetime) -> list[Mapping[str, object]]:
+    """Quotes inside [start, end), in time order, with exact duplicate rows removed."""
+    seen: set[tuple] = set()
+    out: list[tuple[datetime, Mapping[str, object]]] = []
+    for q in rows:
+        t = _ts(str(q["t"]))
+        key = (t, q.get("bp"), q.get("ap"), q.get("bs"), q.get("as"))
+        if start <= t < end and key not in seen:
+            seen.add(key)
+            out.append((t, q))
+    out.sort(key=lambda x: x[0])  # stable: same-timestamp updates keep their feed order
+    return [q for _, q in out]
+
+
 def summarize_quotes(
     quotes: Iterable[Mapping[str, object]], start: datetime, end: datetime,
     spread_cap_bps: float = SPREAD_CAP_BPS, max_quote_age_s: float = MAX_QUOTE_AGE_S,
@@ -114,7 +128,7 @@ def summarize_quotes(
             weighted += last_spread * fresh
             tight += fresh if last_spread <= spread_cap_bps else 0.0
 
-    for q in quotes:
+    for q in clean_quotes(quotes, start, end):
         t = _ts(str(q["t"]))
         counts["quotes"] += 1
         minutes.add(int((t - start).total_seconds() // 60))

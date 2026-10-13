@@ -27,14 +27,14 @@ import math
 import random
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from statistics import fmean, median
 
 from .data.market_calendar import session_windows
 from .data.normalize import BAR_LENGTH
-from .quotes import EXECUTABLE, MAX_QUOTE_AGE_S, SPREAD_CAP_BPS, QuoteSource, quote_state, spread_bps
+from .quotes import EXECUTABLE, MAX_QUOTE_AGE_S, SPREAD_CAP_BPS, QuoteSource, clean_quotes, quote_state, spread_bps
 from .split import EMBARGO
 
 ENTRY_SPAN = timedelta(seconds=30)  # first quote fetch after a signal; latency + entry timeout must fit in it
@@ -192,8 +192,7 @@ class QuoteStore:
             with gzip.open(tmp, "wt", encoding="utf-8") as fh:
                 fh.writelines(json.dumps(r, sort_keys=True) + "\n" for r in rows)
             tmp.replace(path)
-        quotes = [parse_quote(r) for r in rows]
-        return sorted((q for q in quotes if start <= q.t < end), key=lambda q: q.t)
+        return [parse_quote(r) for r in clean_quotes(rows, start, end)]
 
 
 def quote_stages(sig: Signal, strat: StrategyConfig) -> tuple[tuple[datetime, datetime], tuple[datetime, datetime]]:
@@ -383,6 +382,29 @@ def signals_from_breakouts(rows: Iterable[Mapping[str, str]], samples: set[str])
         out.append(Signal(r["symbol"], date.fromisoformat(r["trading_date"]), r["session"], r["sample"], start,
                           available, float(r.get("sip_price") or "nan")))
     return out
+
+
+MIN_TRADES_FOR_SELECTION = 30
+
+
+def with_spread_caps(scenarios: Iterable[ExecConfig], caps: Iterable[float]) -> list[ExecConfig]:
+    """One variant per spread cap for each capped scenario; the uncapped idealized reference runs once."""
+    caps = list(caps)
+    out: list[ExecConfig] = []
+    for c in scenarios:
+        out += [c] if c.spread_cap_bps is None else [replace(c, name=f"{c.name}_cap{cap:g}", spread_cap_bps=cap)
+                                                     for cap in caps]
+    return out
+
+
+def select_spread_cap(results: Mapping[str, Mapping[str, Mapping[str, object]]], caps: Iterable[float]) -> dict[str, object]:
+    """Pre-registered in-sample rule: the base-case cap with the highest expectancy in R among caps with
+    at least MIN_TRADES_FOR_SELECTION trades; ties go to the tighter cap."""
+    rows = [(cap, results[f"base_cap{cap:g}"]["all"]) for cap in sorted(caps) if f"base_cap{cap:g}" in results]
+    ok = [(cap, r) for cap, r in rows if int(r["trades"]) >= MIN_TRADES_FOR_SELECTION]  # type: ignore[call-overload]
+    best = max(ok, key=lambda x: (float(x[1]["expectancy_r"]), -x[0]), default=None)  # type: ignore[arg-type]
+    return {"rule": f"max base-case expectancy_r, >= {MIN_TRADES_FOR_SELECTION} trades, ties to tighter cap",
+            "selected_spread_cap_bps": best[0] if best else None}
 
 
 def _bootstrap_ci(values: list[float], seed: int = 0, n: int = 2000) -> tuple[float, float] | None:

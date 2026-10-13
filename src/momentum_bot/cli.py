@@ -71,6 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--dataset", required=True, help="Dataset folder built by m1-dataset")
     bt.add_argument("--sample", choices=("in_sample", "out_of_sample"), default="in_sample")
     bt.add_argument("--scenarios", default="idealized,base,stress", help=f"Comma-separated: {','.join(backtest.SCENARIOS)}")
+    bt.add_argument("--spread-caps", default="50",
+                    help="Comma-separated entry spread caps in bps; each capped scenario runs once per cap")
     bt.add_argument("--confirm-out-of-sample", action="store_true",
                     help="Required for --sample out_of_sample: the hold-out should be evaluated once, with frozen configs")
     return parser
@@ -167,10 +169,11 @@ def _backtest(args: argparse.Namespace) -> int:
         print("error: out-of-sample runs need --confirm-out-of-sample (evaluate the hold-out once)", file=sys.stderr)
         return EXIT_USAGE
     try:
-        scenarios = [backtest.SCENARIOS[n] for n in args.scenarios.split(",")]
+        caps = [float(c) for c in args.spread_caps.split(",")]
+        scenarios = backtest.with_spread_caps([backtest.SCENARIOS[n] for n in args.scenarios.split(",")], caps)
         provider = AlpacaHistoricalProvider.from_env()
-    except KeyError as exc:
-        print(f"error: unknown scenario {exc}", file=sys.stderr)
+    except (KeyError, ValueError) as exc:
+        print(f"error: bad --scenarios or --spread-caps: {exc}", file=sys.stderr)
         return EXIT_USAGE
     except AuthenticationError as exc:
         print(f"error: {exc}. See .env.example.", file=sys.stderr)
@@ -198,6 +201,9 @@ def _backtest(args: argparse.Namespace) -> int:
     except (EntitlementError, AuthenticationError) as exc:
         print(f"error: SIP quotes blocked: {exc}", file=sys.stderr)
         return EXIT_BLOCKED
+    if args.sample == "in_sample":
+        summary["spread_cap_selection"] = backtest.select_spread_cap(summary["results"], caps)  # type: ignore[arg-type]
+        print(f"selected spread cap (in-sample rule): {summary['spread_cap_selection']}")
     path = dataset / f"backtest_summary_{args.sample}.json"
     path.write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
     print(f"summary: {path} ({provider.request_count} API requests, 0 orders)")
