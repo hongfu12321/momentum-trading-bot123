@@ -19,11 +19,36 @@ Verify historical SIP access on Alpaca Basic, compare consolidated SIP and IEX o
 
 Requires Python 3.12. Only runtime dependency: `tzdata` (IANA time zones on Windows).
 
+### Windows PowerShell
+
+```powershell
+python --version                    # should report Python 3.12.x
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+Copy-Item .env.example .env         # then fill in Alpaca keys
+```
+
+If `python` opens the Microsoft Store or is not recognized, close and reopen
+PowerShell (and VS Code, if using its integrated terminal). To fix the current
+PowerShell window immediately, add the install directory to its PATH:
+
+```powershell
+$python312 = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312'
+$env:Path = "$python312;$python312\Scripts;$env:Path"
+python --version
+```
+
+For future terminals, ensure `$env:LOCALAPPDATA\Programs\Python\Python312` and
+its `Scripts` subdirectory are in your user PATH.
+
+### macOS and Linux
+
 ```bash
 python3.12 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env               # then fill in Alpaca keys (paper-account keys work for market data)
+cp .env.example .env               # then fill in Alpaca keys
 ```
 
 Keys can also be set as environment variables `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`; real environment variables take precedence over `.env`.

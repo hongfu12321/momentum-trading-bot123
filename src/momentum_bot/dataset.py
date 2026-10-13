@@ -277,6 +277,10 @@ def build_dataset(
                     if sb.session == session:
                         by[sb.bar.feed][sb.bar.symbol].append(sb.bar)
 
+                # The first after-hours bar holds the closing auction; keep its volume out of coverage shares.
+                auction_t = w.start_utc if session != PREMARKET and p.exclude_closing_auction_bar else None
+                tables["eligibility"][-1].update({f"{f}_auction_bar_volume": sum(
+                    b.volume for rows in by[f].values() for b in rows if b.timestamp_utc == auction_t) for f in FEEDS})
                 for name, b0, b1 in _buckets(w, cfg.bucket_minutes):
                     row: dict[str, object] = {"trading_date": d.isoformat(), "session": session, "bucket_et": name,
                                               "eligible": len(eligible)}
@@ -284,7 +288,7 @@ def build_dataset(
                         inside = [b for rows in by[f].values() for b in rows if b0 <= b.timestamp_utc < b1]
                         row[f"{f}_symbols_with_bars"] = len({b.symbol for b in inside})
                         row[f"{f}_bars"] = len(inside)
-                        row[f"{f}_volume"] = sum(b.volume for b in inside)
+                        row[f"{f}_volume"] = sum(b.volume for b in inside if b.timestamp_utc != auction_t)
                     tables["coverage_buckets"].append(row)
 
                 for sym in eligible:

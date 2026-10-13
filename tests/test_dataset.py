@@ -21,6 +21,7 @@ def intraday() -> list[Bar]:
     for m in ("04:00", "04:01", "04:02", "04:03", "04:04", "04:05"):  # GAP: +20% on 110k SIP volume
         bars += [bar("sip", D8, m, 2.05, 2.06, 10_000, "GAP"), bar("iex", D8, m, 2.05, 2.06, 300, "GAP")]
     bars += [bar("sip", D8, "04:06", 2.40, 2.45, 50_000, "GAP"), bar("iex", D8, "04:06", 2.40, 2.44, 1500, "GAP")]
+    bars += [bar("sip", D8, "16:00", 2.40, 2.40, 9_000_000, "GAP"), bar("sip", D8, "16:01", 2.41, 2.41, 700, "GAP")]
     bars += [bar("sip", D8, "05:00", 5.10, 5.10, 200_000, "SPL")]  # post 1:10 reverse split; +2% vs adjusted ref
     bars += [bar("sip", D7, "04:30", 3.00, 3.00, 500, "OLD"), bar("sip", D7, "04:30", 3.00, 3.00, 500, "NEW")]
     return bars
@@ -35,7 +36,7 @@ class FakeAlpaca:
         self.ca_calls = 0
         self.daily = [daily("GAP", D6, 2.0), daily("GAP", D7, 2.0), daily("SPL", D6, 0.5), daily("SPL", D7, 0.5),
                       daily("OLD", D6, 3.0), daily("NEW", D6, 3.0), daily("NEW", D7, 3.0), daily("DEAD", D6, 9.0),
-                      daily("BRK.B", D6, 400.0), daily("BRK.B", D7, 400.0)]
+                      daily("BRK.B", D6, 400.0), daily("BRK.B", D7, 400.0), daily("GAP", D8, 2.4)]
         self.minute = intraday()
 
     def get_bars(self, req: BarsRequest) -> list[Bar]:
@@ -74,6 +75,10 @@ def test_dataset_point_in_time_rules_and_reproducible_cache(tmp_path: Path) -> N
         "symbol": "SPL", "trading_date": "2024-03-08", "session": "premarket",
         "candidate_without_adjustment": True, "candidate_with_adjustment": False,
     }]
+    ah = elig[("2024-03-08", "afterhours")]
+    assert ah["sip_auction_bar_volume"] == 9_000_000
+    ah_buckets = [r for r in result.tables["coverage_buckets"] if r["trading_date"] == "2024-03-08" and r["session"] == "afterhours"]
+    assert sum(r["sip_volume"] for r in ah_buckets) == 700  # auction bar excluded from coverage volume
     s = result.manifest["summary"]["premarket"]
     assert s["candidates"]["sip_total"] == 1 and s["candidates"]["iex_recall_of_sip"] == 0.0
 

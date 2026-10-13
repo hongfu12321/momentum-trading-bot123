@@ -62,3 +62,11 @@ def test_code_version_reads_git_dir_without_git(tmp_path: Path, monkeypatch: pyt
 def test_code_version_with_git() -> None:
     sha = provenance.code_version()
     assert sha != "unknown" and len(sha.split("-")[0]) == 7
+
+
+def test_reused_ticker_is_not_hidden_after_rename() -> None:
+    actions = {"name_changes": [{"old_symbol": "GAP", "new_symbol": "NEW", "process_date": "2024-03-08"}]}
+    uni = build_universe(parse_directory(NASDAQ, OTHER), actions, date(2024, 3, 6))
+    assert uni.origin["GAP"] == "current_listing"  # GAP is listed today by a different issuer
+    assert "GAP" in uni.symbols_for(date(2024, 3, 8))
+    assert "NEW" not in uni.symbols_for(date(2024, 3, 7))

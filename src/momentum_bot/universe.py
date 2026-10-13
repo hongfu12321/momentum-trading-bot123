@@ -97,7 +97,8 @@ class Universe:
 
     def symbols_for(self, d: date) -> list[str]:
         hidden = {new for old, new, p in self.renames if d < p and old in self.origin}
-        hidden |= {old for old, new, p in self.renames if d >= p}
+        # A pre-rename ticker that is listed again today belongs to a different issuer: keep it.
+        hidden |= {old for old, new, p in self.renames if d >= p and self.origin[old].startswith("renamed_to")}
         hidden |= {s for s, p in self.delisted_on.items() if d >= p}
         return sorted(s for s in self.origin if s not in hidden)
 

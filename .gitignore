@@ -7,8 +7,9 @@ __pycache__/
 build/
 dist/
 reports/runs/
-# M1-B datasets: raw bars, Alpaca-sourced snapshots and large gzip tables stay local (manifest.json records their sha256).
-reports/datasets/*/cache/
-reports/datasets/*/inputs/
-reports/datasets/**/*.csv.gz
-reports/datasets/**/*.tmp
+# Dataset folders hold licensed Alpaca market data (raw bars, quotes, per-symbol prices) and
+# snapshots. Only aggregate, price-free outputs are committed; manifest.json records sha256 of inputs.
+reports/datasets/*/*
+!reports/datasets/*/report.md
+!reports/datasets/*/manifest.json
+!reports/datasets/*/eligibility.csv
