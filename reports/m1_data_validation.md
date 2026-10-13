@@ -1,13 +1,12 @@
-# M1 data validation — observations
+# M1-A data validation: observations
 
-**Status: not yet run against the Alpaca API.** No real observations are recorded here, and none
-should be inferred from the offline test fixtures, which are synthetic.
+**Status: passed.** Historical SIP and IEX 1m bars are both entitled on this Alpaca account for dates older than the delay window.
 
-To produce real results, run the documented command (see README, "M1 command") with Alpaca
-credentials, then summarise the generated `reports/runs/m1_<timestamp>/report.md` here:
+M1-A sample run (local folder `reports/runs/m1_20261013T163100Z/`, not committed): SOUN, MARA, PLUG on 2024-03-08, status `complete`, 4 API requests, 0 orders.
 
-- Run folder, code SHA, dates, symbols and how the symbol list was chosen (selection bias).
-- Whether historical SIP was entitled on the account (copy any entitlement error verbatim).
-- Premarket and after-hours coverage, IEX volume share, session high/low differences.
-- Candidate and breakout recall of IEX relative to SIP, with sample sizes.
-- Limitations listed in the run report, plus anything unexpected (e.g. IEX-only minutes).
+| session | SIP bar minutes | IEX bar minutes | SIP volume | IEX volume | IEX share |
+|---|---:|---:|---:|---:|---:|
+| premarket | 755 | 17 | 8,895,120 | 5,679 | 0.06% |
+| after-hours | 565 | 1 | 5,501,333 | 500 | 0.01% |
+
+IEX missed the one SIP scanner candidate and all 11 price-band breakouts. Three symbols on one day is a feasibility check only. The broad 30-day study and the M2 recommendation are in [`m1_feasibility.md`](m1_feasibility.md).
