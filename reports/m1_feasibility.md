@@ -1,8 +1,8 @@
 # M1 feasibility report: extended-hours data, universe and candidate discovery
 
-**Dataset:** `reports/datasets/m1b_20260828_20261009/` (generated `report.md`, `manifest.json`, CSVs)
+**Dataset:** `reports/datasets/m1b_20260828_20261009/`. Only the generated `report.md`, `manifest.json` and count-only `eligibility.csv` are committed; per-symbol tables, raw bars and input snapshots are licensed data and stay local.
 **Window:** 30 trading days, 2026-08-28 to 2026-10-09; premarket 04:00–09:30 ET and after-hours 16:00–20:00 ET
-**Code:** `de964b5` · **API:** Alpaca market data only (611 requests on the first build, 0 on cached reruns) · **Orders placed:** 0
+**Code:** `aa17b19` · **API:** Alpaca market data only (611 requests on the first build, 0 on cached reruns) · **Orders placed:** 0
 **Reproduce:** `momentum-bot m1-dataset --start 2026-08-28 --end 2026-10-09 --out-dir reports/datasets/m1b_20260828_20261009`
 
 ## Recommendation
@@ -34,7 +34,7 @@ Candidates trade almost every minute once they trigger in premarket. After hours
 
 | | premarket | after-hours |
 |---|---:|---:|
-| IEX volume share of SIP | 0.2% | ≈0.0% |
+| IEX volume share of SIP (closing-auction bar excluded) | 0.2% | 0.1% |
 | SIP scanner candidates | 630 | 574 |
 | IEX recall of SIP candidates | 7.1% (45) | 1.7% (10) |
 | IEX recall of candidate-gated breakouts, same minute | 2.0% | 0.5% |
@@ -80,4 +80,4 @@ How the universe is built (`src/momentum_bot/universe.py`):
 
 1. **Dataset length for M2:** I recommend 90 trading days (about 60 in-sample and 30 out-of-sample). The calendar already covers 2026, but the table must be extended for dates before 2023.
 2. **Closing the compliance-delisting gap:** options are (a) accept and disclose it, or (b) allow one read-only GET to Alpaca's asset list including inactive symbols (`/v2/assets?status=inactive`). Option (b) means touching the paper trading API host, which M1's rules currently forbid, so it needs your explicit approval.
-3. **Whether to commit the input snapshots** (`inputs/`) to the repo. They are currently kept local because the corporate-actions file is Alpaca data; the manifest records their sha256 hashes.
+3. ~~Whether to commit the input snapshots~~: resolved. Licensed snapshots and per-symbol tables stay local.
