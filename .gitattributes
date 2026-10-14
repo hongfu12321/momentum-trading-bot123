@@ -1,0 +1,5 @@
+# Check out text files with LF on every OS, so committed reports and manifests hash the same on
+# Windows as on macOS/Linux. Provenance hashing also normalizes CRLF (diagnostics.HASH_POLICY).
+* text=auto eol=lf
+*.gz binary
+*.png binary

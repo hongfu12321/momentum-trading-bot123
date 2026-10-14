@@ -600,8 +600,35 @@ class InputMismatch(ValueError):
     """The dataset, backtest summary and ledgers do not belong together; diagnostics refuse to run."""
 
 
+# Canonical hashing policy for provenance records. Text files are hashed with Windows CRLF line endings
+# normalized to LF, so the same content hashes the same after a Windows write or a git checkout with
+# core.autocrlf; every other file (e.g. .gz) is hashed as raw bytes. Records written before this policy
+# have no "hash_policy" field and may hold a raw CRLF hash: see hash_check.
+HASH_POLICY = "sha256-text-lf-v1"
+TEXT_SUFFIXES = frozenset({".csv", ".json", ".md", ".txt"})
+
+
+def _canonical_bytes(path: Path) -> bytes:
+    data = path.read_bytes()
+    return data.replace(b"\r\n", b"\n") if path.suffix in TEXT_SUFFIXES else data
+
+
 def sha256_of(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """Content hash under HASH_POLICY."""
+    return hashlib.sha256(_canonical_bytes(path)).hexdigest()
+
+
+def hash_check(path: Path, recorded: str | None, policy: str | None) -> str:
+    """Compare a file with a recorded hash: "ok", "missing", "mismatch", or "legacy_crlf" when a record
+    without a hash policy holds the raw hash of the same text written with CRLF line endings (Windows)."""
+    if not path.is_file():
+        return "missing"
+    if sha256_of(path) == recorded:
+        return "ok"
+    if policy is None and path.suffix in TEXT_SUFFIXES:
+        if hashlib.sha256(_canonical_bytes(path).replace(b"\n", b"\r\n")).hexdigest() == recorded:
+            return "legacy_crlf"
+    return "mismatch"
 
 
 def _typed(cls: type, row: Mapping[str, str]) -> object:
@@ -680,6 +707,7 @@ def validate_inputs(dataset: Path, sample: str, scenario: str, strat: StrategyCo
     if problems:
         raise InputMismatch("diagnostics inputs are inconsistent:\n- " + "\n- ".join(problems))
     return {
+        "hash_policy": HASH_POLICY,
         "dataset": {"path": dataset.as_posix(), "manifest_sha256": sha256_of(paths["manifest"]),
                     "manifest_created_at_utc": manifest.get("created_at_utc"),
                     "manifest_code_sha": manifest.get("code_sha"),

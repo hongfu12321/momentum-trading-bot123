@@ -81,6 +81,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Required for out_of_sample: report only, never use it to choose filters or parameters")
     bt.add_argument("--confirm-out-of-sample", action="store_true",
                     help="Required for --sample out_of_sample: the hold-out should be evaluated once, with frozen configs")
+    ch = sub.add_parser("m2-chart", help="Export one session's annotated baseline replay charts to a standalone local HTML file.")
+    ch.add_argument("--dataset", required=True, help="Dataset folder with m2-diagnostics outputs")
+    ch.add_argument("--date", required=True, help="Trading date, YYYY-MM-DD")
+    ch.add_argument("--session", choices=("premarket", "afterhours"), default="premarket")
+    vw = sub.add_parser("m2-viewer", help="Launch the localhost historical replay viewer (Streamlit, 127.0.0.1 only).")
+    vw.add_argument("--dataset", default="reports/datasets/m2_sip_20260603_20261009", help="Dataset folder")
+    vw.add_argument("--port", type=int, default=8501)
     return parser
 
 
@@ -95,6 +102,10 @@ def main(argv: list[str] | None = None) -> int:
         return _backtest(args)
     if args.command == "m2-diagnostics":
         return _diagnostics(args)
+    if args.command == "m2-chart":
+        return _chart(args)
+    if args.command == "m2-viewer":
+        return _viewer(args)
     symbols = _symbols(args)
     if not symbols:
         print("error: provide --symbols or --symbols-file", file=sys.stderr)
@@ -237,6 +248,27 @@ def _diagnostics(args: argparse.Namespace) -> int:
     print(f"{summary['trades']} trades diagnosed; aggregate report: {dataset / (stem + '.md')}")
     print(f"local ledgers and dashboard: {dataset / 'diagnostics' / args.sample / args.scenario}")
     return EXIT_OK
+
+
+def _chart(args: argparse.Namespace) -> int:
+    from . import charts  # plotly is an optional dependency: pip install -e ".[viewer]"
+
+    try:
+        path = charts.export_session(Path(args.dataset), args.date, args.session)
+    except (FileNotFoundError, ValueError) as exc:  # includes charts.ReplayDataError (refused provenance)
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    print(f"charts: {path} (local only: contains licensed market data; do not commit or publish)")
+    return EXIT_OK
+
+
+def _viewer(args: argparse.Namespace) -> int:
+    import subprocess
+
+    app = Path(__file__).with_name("viewer.py")
+    cmd = [sys.executable, "-m", "streamlit", "run", str(app), "--server.address", "127.0.0.1",
+           "--server.port", str(args.port), "--browser.gatherUsageStats", "false", "--", "--dataset", args.dataset]
+    return subprocess.call(cmd)
 
 
 if __name__ == "__main__":
