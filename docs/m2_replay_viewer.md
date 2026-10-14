@@ -2,7 +2,7 @@
 
 Historical simulation only. Nothing here can place, change or route an order; there is no broker, paper or live execution code, and the viewer makes no network requests.
 
-The viewer replays the **baseline strategy only**: `candle_close_confirmation` (a signal exists only after its 1-minute trigger candle closes) with the frozen `base_cap50` configuration from PR #4. It reads the outputs of `m2-backtest` and `m2-diagnostics`. It covers every dataset date whose ledgers pass the provenance check, in-sample and the report-only out-of-sample block.
+The viewer replays the **baseline strategy only**: `candle_close_confirmation` (a signal exists only after its 1-minute trigger candle closes) with the frozen `base_cap50` configuration from PR #4. It reads the outputs of `m2-backtest` and `m2-diagnostics`. It covers every trading day of each sample whose ledgers pass the provenance check, in-sample and the report-only out-of-sample block, including days and sessions without signals (shown as empty states).
 
 ## Commands (Windows PowerShell)
 
@@ -19,12 +19,34 @@ The viewer replays the **baseline strategy only**: `candle_close_confirmation` (
 
 Before showing a sample, the viewer checks its PR #5 ledgers against the provenance record `m2-diagnostics` wrote in `diagnostics_<sample>_base_cap50.json`:
 
-1. `manifest.json`, `breakout_matches.csv`, `backtest_summary_<sample>.json` and the PR #4 `trades.csv` / `attempts.csv` still have the recorded hashes.
-2. The ledgers have the current schema, including the corrected exit fields (`exit_complete`, `exit_qty`, `remaining_qty`, `realized_usd`, `marked_usd`), and the recorded row counts.
-3. Every ledger row belongs to the sample, and its date lies in the manifest's range for it.
-4. The ledgers reconcile with the backtest summary: entries, completed trades, incomplete exits and completed-trade net P&L.
+1. **Hashes** (canonical policy below) of `manifest.json`, `breakout_matches.csv`, `backtest_summary_<sample>.json`, the PR #4 `trades.csv` / `attempts.csv`, and, when the record covers them, the PR #5 ledgers, `candidates.csv.gz` and every cached SIP bar file of the sample's days. A bar file on disk that the record does not list is refused as added or replaced.
+2. **Sample and scenario**: the diagnostics file, backtest summary and every ledger row must be `<sample>` / `base_cap50`, with dates inside the manifest's range for the sample.
+3. **Schema and counts**: the current ledger schema (including the corrected exit fields) and the recorded row counts.
+4. **Reconciliation** with the backtest summary: signals, entries, completed trades, incomplete exits, completed-trade net P&L, realized P&L and unrealized marks of incomplete exits, unmarked exits and unsold shares.
+5. **Row cross-check**: every displayed trade (fill times and prices, quantities, exit, mark, P&L, R) must equal its PR #4 `trades.csv` row, every signal must be in `attempts.csv`, and each signal price must equal its `breakout_matches.csv` price. This also protects records written before ledger hashing.
 
-A sample that fails is not shown, and the page lists each problem with the command to fix it. A sample without ledgers is reported as absent. The checks rerun whenever any of those files changes on disk.
+A sample that fails is not shown and the page lists each problem. A sample without ledgers is reported as absent. The viewer re-checks on every interaction using content hashes of those files (not size or modification time), and checks the open session's bar file again when it loads, so an edit made while the viewer is open is refused, never shown stale.
+
+**Records written before this check existed** (the committed `diagnostics_*_base_cap50.json`) do not hold bar, candidate or ledger hashes. The viewer then shows a warning that those inputs could not be verified, and still applies checks 2–5. To cover them, rerun `m2-diagnostics` for each sample; it is cache-only and makes no network requests.
+
+## Offline audit: `m2-viewer-check`
+
+```powershell
+.\.venv\Scripts\momentum-bot.exe m2-viewer-check --dataset reports\datasets\m2_sip_20260603_20261009
+```
+
+It runs the same validation, then cross-checks everything the viewer would display for every trading day and session:
+
+- **Totals, three ways.** The viewer's ledgers, the sum of its daily summaries, and the PR #4 `trades.csv` / `attempts.csv` are each compared with the backtest summary.
+- **Every chart marker** is compared with the PR #4 row it shows:
+  - the trigger candle is present and closes at the signal price;
+  - the signal is available exactly at the candle's close;
+  - entry and exit fills, with their time and price;
+  - stop and target levels;
+  - the unsold remainder of an incomplete exit, with its mark time and price.
+- **Every candle** must lie inside its session and be complete.
+
+It prints the totals, the number of markers checked and every mismatch, and writes `viewer_check.json` to the dataset folder (local: it names symbols). Exit code 0 means no mismatches, 4 means mismatches were found, and 2 means the data was refused. It makes no network requests.
 
 ## Canonical hashing policy (Windows CRLF vs LF)
 
@@ -61,4 +83,5 @@ Records written before the policy have no `hash_policy` field and may hold the r
 
 - Fills, P&L and quotes shown are the PR #4 simulation against historical SIP NBBO; they are not evidence of live or paper fill quality.
 - The PR #5 trade ledger does not store the exit-window end, so the unsold-remainder marker is placed at trigger + 2 minutes (capped at the session close), the same rule the backtester uses.
-- The viewer trusts the ledgers' content once their provenance and totals check out; it does not re-simulate trades.
+- The viewer does not re-simulate trades. It checks the ledgers against the PR #4 outputs, which are themselves checked by hash against the provenance record.
+- Signal-time quote fields (spread, quote age, state) come from the quote cache through PR #5; they are hash-covered only through the ledger hashes, which older records lack.

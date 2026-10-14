@@ -631,6 +631,21 @@ def hash_check(path: Path, recorded: str | None, policy: str | None) -> str:
     return "mismatch"
 
 
+def sample_dates(manifest: Mapping[str, object], sample: str, signals: set[tuple[str, str]]) -> list[str]:
+    """Trading days of a sample: the manifest's split range, else the days with a signal."""
+    blk = manifest.get("chronological_split", {}).get(sample)  # type: ignore[union-attr]
+    if blk and manifest.get("trading_days"):
+        return [d for d in manifest["trading_days"] if blk["first"] <= d <= blk["last"]]  # type: ignore[union-attr]
+    return sorted({datetime.fromisoformat(t).astimezone(ET).date().isoformat() for _, t in signals})
+
+
+def sip_bar_hashes(dataset: Path, days: Iterable[str]) -> dict[str, str]:
+    """sha256 of every cached SIP 1-minute bar file of those days, keyed by file name (raw bytes: gzip)."""
+    wanted = set(days)
+    return {p.name: sha256_of(p) for p in sorted((dataset / "cache" / "sip").glob("*_*_*.csv.gz"))
+            if p.name[:10] in wanted and p.name[11:].startswith(("premarket_", "afterhours_"))}
+
+
 def _typed(cls: type, row: Mapping[str, str]) -> object:
     """A Trade or Attempt from its CSV row, using the dataclass field types."""
     conv: dict[str, Callable[[str], object]] = {"str": str, "int": int, "float": float, "bool": lambda v: v == "True",
@@ -712,7 +727,11 @@ def validate_inputs(dataset: Path, sample: str, scenario: str, strat: StrategyCo
                     "manifest_created_at_utc": manifest.get("created_at_utc"),
                     "manifest_code_sha": manifest.get("code_sha"),
                     "breakout_matches_sha256": sha256_of(paths["breakout_matches"]),
-                    "input_sha256": {k: v for k, v in manifest.get("inputs", {}).items() if k.endswith("sha256")}},
+                    "input_sha256": {k: v for k, v in manifest.get("inputs", {}).items() if k.endswith("sha256")},
+                    # Local display inputs of the replay viewer, so it can refuse edited or swapped files.
+                    "candidates_sha256": sha256_of(dataset / "candidates.csv.gz")
+                    if (dataset / "candidates.csv.gz").is_file() else None,
+                    "sip_bars_sha256": sip_bar_hashes(dataset, sample_dates(manifest, sample, signals))},
         "backtest_run": {"summary_file": paths["backtest_summary"].name,
                          "summary_sha256": sha256_of(paths["backtest_summary"]),
                          "code_sha": summary.get("code_sha"), "created_at_utc": summary.get("created_at_utc"),

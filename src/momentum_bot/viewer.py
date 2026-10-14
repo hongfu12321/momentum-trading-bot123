@@ -17,6 +17,7 @@ import pandas as pd
 import streamlit as st
 
 from momentum_bot import charts
+from momentum_bot.diagnostics import sha256_of
 
 st.set_page_config(page_title="M2 historical replay", layout="wide")
 
@@ -31,20 +32,32 @@ DATASET = _dataset()
 
 
 def tables(path: str) -> charts.ReplayTables:
-    """Validated ledgers. The size and mtime of every validated file are checked on each rerun; any change
-    reloads and re-validates, so files changed on disk are never shown stale."""
+    """Validated ledgers, reloaded and re-validated whenever a file they depend on changes (``_stamp``)."""
     return _load(path, _stamp(path))
 
 
 def _stamp(path: str) -> tuple:
-    """Size and mtime of every file validation reads; any change reloads and re-validates."""
+    """Content hash of every ledger, summary and input file validation reads, plus the name, size and mtime of
+    every cached SIP bar file. Recomputed on each rerun, so an edit, even one that keeps size and mtime,
+    reloads and re-validates instead of showing stale results. Bar contents are hashed per session (``_bar_stamp``)."""
     ds = Path(path)
     files = [ds / "manifest.json", ds / "breakout_matches.csv", ds / "candidates.csv.gz"]
     for smp in charts.SAMPLES:
         files += [ds / f"backtest_summary_{smp}.json", ds / f"diagnostics_{smp}_{charts.SCENARIO}.json",
                   ds / "backtest" / smp / charts.SCENARIO / "trades.csv", ds / "backtest" / smp / charts.SCENARIO / "attempts.csv",
                   charts.ledger_dir(ds, smp) / "signal_ledger.csv", charts.ledger_dir(ds, smp) / "trade_ledger.csv"]
-    return tuple((str(f), f.stat().st_size, f.stat().st_mtime_ns) if f.is_file() else (str(f),) for f in files)
+    bars = sorted((ds / "cache" / "sip").glob("*.csv.gz"))
+    return (tuple((str(f), sha256_of(f)) if f.is_file() else (str(f),) for f in files)
+            + tuple((f.name, f.stat().st_size, f.stat().st_mtime_ns) for f in bars))
+
+
+def _bar_stamp(path: str, d: str, session: str) -> str:
+    """Content hash of the session's cached bar file ("" if absent or ambiguous; loading then reports why)."""
+    try:
+        f = charts.session_bar_file(Path(path), d, session)
+    except charts.BarCacheError:
+        return "ambiguous"
+    return sha256_of(f) if f else ""
 
 
 @st.cache_resource(show_spinner="Validating and loading ledgers…", max_entries=2)
@@ -53,7 +66,9 @@ def _load(path: str, stamp: tuple) -> charts.ReplayTables:
 
 
 @st.cache_data(show_spinner="Loading the session's 1-minute bars…", max_entries=12)
-def session_data(path: str, stamp: tuple, d: str, session: str) -> charts.SessionData | None:
+def session_data(path: str, stamp: tuple, bar_stamp: str, d: str, session: str) -> charts.SessionData | None:
+    """One session (cached per content of its inputs). None if it has no cached bars; raises
+    charts.BarCacheError if its bar file is ambiguous or differs from the provenance record."""
     try:
         return tables(path).session(Path(path), d, session)
     except FileNotFoundError:
@@ -103,6 +118,8 @@ for chk in T.checks.values():  # never silently drop a sample: say why it is not
     elif chk.status == "absent":
         st.info(f"{chk.sample}: no diagnostics ledgers, so it is not shown. Run m2-backtest and m2-diagnostics "
                 "for it to replay it.")
+    for warn in chk.warnings if chk.status == "ok" else []:
+        st.warning(f"{chk.sample}: {warn}.")
     for note in chk.notes if chk.status == "ok" else []:
         st.caption(f"{chk.sample}: {note}.")
 st.sidebar.caption(f"Dataset folder: {DATASET}")
@@ -126,7 +143,11 @@ c1, c2, c3, c4 = st.columns([2, 2, 3, 3])
 d = c1.selectbox("Trading date", dates, key="date", format_func=lambda x: f"{x} ({T.sample_of(x).replace('_', '-')})")
 session = c2.radio("Session (ET)", charts.SESSIONS, key="session", horizontal=True,
                    format_func={"premarket": "premarket 04:00–09:30", "afterhours": "after hours 16:00–20:00"}.get)
-data = session_data(str(DATASET), STAMP, d, session)
+try:
+    data = session_data(str(DATASET), STAMP, _bar_stamp(str(DATASET), d, session), d, session)
+except charts.BarCacheError as exc:  # never chart bars that differ from the run being replayed
+    st.error(f"Cannot show {d} {session}: {exc}")
+    st.stop()
 symbols = data.chart_symbols if data else []
 if st.session_state.get("symbol") not in symbols:
     st.session_state["symbol"] = symbols[0] if symbols else None
@@ -150,7 +171,9 @@ m[5].metric("Unrealized mark (incomplete)", "—" if not day["incomplete_exits"]
             ("unknown" if mark is None else f"${mark:,.2f}"))
 st.caption("Whole day, both sessions, Original HOS Breakout (base 50 bps). Outcomes: "
            + (", ".join(f"{k} {v}" for k, v in day["outcomes"].items()) or "none")
-           + ". Net P&L counts completed exits only; incomplete exits are never added to it.")
+           + ". Net P&L counts completed exits only; incomplete exits are never added to it"
+           + (f" (their sold shares realized ${day['realized_usd_incomplete']:,.2f}, shown apart)."
+              if day["incomplete_exits"] else "."))
 
 replay, chart_tab, trades_tab, overview = st.tabs(["Scanner replay", "Chart", "Trades", "Overview"])
 

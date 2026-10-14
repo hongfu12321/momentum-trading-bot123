@@ -27,7 +27,7 @@ from .data.market_calendar import ET, session_windows
 from .data.normalize import normalize
 from .data.provider import Bar
 from .dataset import _read_bars
-from .diagnostics import hash_check
+from .diagnostics import hash_check, sample_dates
 
 SCENARIO = "base_cap50"  # the frozen configuration from reports/m2_backtest.md
 SAMPLES = ("in_sample", "out_of_sample")
@@ -59,9 +59,17 @@ def ledger_dir(dataset: Path, sample: str) -> Path:
     return dataset / "diagnostics" / sample / SCENARIO
 
 
+class BarCacheError(ValueError):
+    """The cached SIP bars of a session are ambiguous or differ from the recorded provenance."""
+
+
 def session_bar_file(dataset: Path, d: str, session: str) -> Path | None:
+    """The session's cached SIP bar file; None if absent. Several candidates are an error, never a guess."""
     found = sorted((dataset / "cache" / "sip").glob(f"{d}_{session}_*.csv.gz"))
-    return found[0] if len(found) == 1 else None
+    if len(found) > 1:
+        raise BarCacheError(f"{len(found)} cached SIP bar files for {d} {session} ({', '.join(f.name for f in found)}); "
+                            "remove the stale ones or rebuild the dataset")
+    return found[0] if found else None
 
 
 def load_session_bars(dataset: Path, d: str, session: str, as_of: datetime) -> dict[str, list[Bar]] | None:
@@ -84,6 +92,10 @@ def _f(x: str | None) -> float | None:
     return v if v == v else None
 
 
+def _t(x: object) -> datetime | None:
+    return datetime.fromisoformat(str(x)) if x not in (None, "") else None
+
+
 # ---------- provenance: refuse stale or mismatched ledgers ----------
 
 @dataclass(slots=True)
@@ -91,8 +103,10 @@ class SampleCheck:
     sample: str
     status: str  # ok | absent (no ledgers: nothing to show) | mismatch (refused)
     problems: list[str] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)  # informational, e.g. a legacy CRLF hash match
+    warnings: list[str] = field(default_factory=list)  # shown prominently: something could not be verified
     diagnostics: dict = field(default_factory=dict)
+    bar_hashes: dict[str, str] | None = None  # recorded sha256 per SIP bar file; None = not covered (legacy record)
 
 
 def validate_sample(dataset: Path, sample: str, manifest: Mapping[str, object] | None = None) -> SampleCheck:
@@ -100,8 +114,9 @@ def validate_sample(dataset: Path, sample: str, manifest: Mapping[str, object] |
 
     The ledgers must still match the provenance m2-diagnostics recorded: the same manifest,
     breakout_matches.csv, backtest summary and PR #4 trades/attempts files (hashed with
-    ``diagnostics.HASH_POLICY``), the current ledger schema, the recorded row counts, and the
-    backtest summary's completed-trade count, net P&L and incomplete exits."""
+    ``diagnostics.HASH_POLICY``), the scanner candidates and SIP bar files when the record covers
+    them, the sample and scenario, the current ledger schema, the recorded row counts, and the
+    backtest summary's entries, completed trades, net P&L and incomplete exits (realized and marked)."""
     led = ledger_dir(dataset, sample)
     if not (led / "signal_ledger.csv").is_file():
         return SampleCheck(sample, "absent", notes=[f"no diagnostics ledgers in {led}"])
@@ -118,13 +133,35 @@ def validate_sample(dataset: Path, sample: str, manifest: Mapping[str, object] |
         p.append(f"diagnostics file describes {diag.get('sample')}/{diag.get('scenario')}, not {sample}/{SCENARIO}")
     policy = pv.get("hash_policy")
     bt = dataset / "backtest" / sample / SCENARIO
-    for label, path, recorded in (
-            ("manifest.json", dataset / "manifest.json", pv["dataset"]["manifest_sha256"]),
-            ("breakout_matches.csv", dataset / "breakout_matches.csv", pv["dataset"]["breakout_matches_sha256"]),
-            (f"backtest_summary_{sample}.json", dataset / f"backtest_summary_{sample}.json",
-             pv["backtest_run"]["summary_sha256"]),
-            ("trades.csv", bt / "trades.csv", pv["backtest_run"]["trades_sha256"]),
-            ("attempts.csv", bt / "attempts.csv", pv["backtest_run"]["attempts_sha256"])):
+    files = [("manifest.json", dataset / "manifest.json", pv["dataset"]["manifest_sha256"]),
+             ("breakout_matches.csv", dataset / "breakout_matches.csv", pv["dataset"]["breakout_matches_sha256"]),
+             (f"backtest_summary_{sample}.json", dataset / f"backtest_summary_{sample}.json",
+              pv["backtest_run"]["summary_sha256"]),
+             ("trades.csv", bt / "trades.csv", pv["backtest_run"]["trades_sha256"]),
+             ("attempts.csv", bt / "attempts.csv", pv["backtest_run"]["attempts_sha256"])]
+    if pv["dataset"].get("candidates_sha256"):
+        files.append(("candidates.csv.gz", dataset / "candidates.csv.gz", pv["dataset"]["candidates_sha256"]))
+    bars = pv["dataset"].get("sip_bars_sha256")
+    if bars is None:
+        chk.warnings.append("the SIP bar cache and scanner candidates are not covered by this provenance record "
+                            "(written before bar hashing): their content cannot be verified. Rerun m2-diagnostics "
+                            "(cache only, no network) to cover them")
+    else:
+        chk.bar_hashes = dict(bars)
+        days = sample_dates(read_json(dataset / "manifest.json"), sample, set())
+        on_disk = {f.name for f in (dataset / "cache" / "sip").glob("*_*_*.csv.gz")
+                   if f.name[:10] in days and f.name[11:].startswith(("premarket_", "afterhours_"))}
+        for extra in sorted(on_disk - bars.keys()):
+            p.append(f"SIP bar file {extra} is not in the provenance record; it was added or replaced after the run")
+        files += [(f"SIP bar file {name}", dataset / "cache" / "sip" / name, h) for name, h in sorted(bars.items())]
+    ledger_hashes = diag.get("ledgers_sha256")
+    if ledger_hashes:
+        files += [(name, led / name, h) for name, h in sorted(ledger_hashes.items())]
+    else:
+        chk.warnings.append("the diagnostics ledgers are not hash-covered by this record (written before ledger "
+                            "hashing); every displayed trade and signal is cross-checked against the PR #4 ledgers "
+                            "instead. Rerun m2-diagnostics (cache only) to cover them")
+    for label, path, recorded in files:
         state = hash_check(path, recorded, policy)
         if state == "missing":
             p.append(f"{label} is missing ({path})")
@@ -134,8 +171,8 @@ def validate_sample(dataset: Path, sample: str, manifest: Mapping[str, object] |
         elif state == "legacy_crlf":
             chk.notes.append(f"{label} matched its recorded hash with Windows CRLF line endings (recorded before "
                              "the canonical LF hashing policy)")
-    signals, trades = read_table(led / "signal_ledger.csv"), read_table(led / "trade_ledger.csv") \
-        if (led / "trade_ledger.csv").is_file() else []
+    signals = read_table(led / "signal_ledger.csv")
+    trades = read_table(led / "trade_ledger.csv") if (led / "trade_ledger.csv").is_file() else []
     for name, rows, want in (("signal_ledger.csv", signals, SIGNAL_COLUMNS), ("trade_ledger.csv", trades, TRADE_COLUMNS)):
         header = set(rows[0]) if rows else set(want)
         if not set(want) <= header:
@@ -150,24 +187,104 @@ def validate_sample(dataset: Path, sample: str, manifest: Mapping[str, object] |
                  f"from {run.get('trades_rows')} backtest trades")
     if {r.get("sample") for r in (*signals, *trades)} - {sample}:
         p.append(f"ledgers contain rows of another sample than {sample}")
+    if {r.get("scenario") for r in (*signals, *trades)} - {SCENARIO}:
+        p.append(f"ledgers contain rows of another scenario than {SCENARIO}")
+    summary = read_json(dataset / f"backtest_summary_{sample}.json")
+    if summary and summary.get("sample") != sample:
+        p.append(f"backtest_summary_{sample}.json is for sample {summary.get('sample')!r}")
     blk = (manifest or read_json(dataset / "manifest.json")).get("chronological_split", {}).get(sample)  # type: ignore[union-attr]
     if blk and any(not blk["first"] <= r["trading_date"] <= blk["last"] for r in (*signals, *trades)):
         p.append(f"ledger dates fall outside the manifest's {sample} range {blk['first']}..{blk['last']}")
     if not p:  # P&L reconciliation against the backtest run the ledgers claim to explain
-        res = read_json(dataset / f"backtest_summary_{sample}.json").get("results", {}).get(SCENARIO, {}).get("all")
+        res = summary.get("results", {}).get(SCENARIO, {}).get("all")
         if not res:
             p.append(f"backtest_summary_{sample}.json has no {SCENARIO} result")
         else:
-            done = [t for t in trades if _f(t["r_multiple"]) is not None]
-            net = sum(float(t["net_usd"]) for t in done)
-            open_ = len(trades) - len(done)
-            if (len(trades), len(done), open_) != (res["entries"], res["trades"], res["incomplete_exits"]["count"]) \
-                    or abs(net - res["net_usd"]) > 1e-6:
-                p.append(f"ledgers do not reconcile with backtest_summary_{sample}.json: {len(trades)} entries, "
-                         f"{len(done)} completed, {open_} incomplete, net ${net:.2f} against {res['entries']}, "
-                         f"{res['trades']}, {res['incomplete_exits']['count']}, ${res['net_usd']:.2f}")
+            got, want = ledger_totals(signals, trades), summary_totals(res)
+            bad = [k for k in want if not _same(got[k], want[k])]
+            if bad:
+                p.append(f"ledgers do not reconcile with backtest_summary_{sample}.json: "
+                         + ", ".join(f"{k} {got[k]} vs {want[k]}" for k in bad))
+            p += cross_check_ledgers(dataset, sample, signals, trades)
     chk.status = "mismatch" if p else "ok"
     return chk
+
+
+# trade ledger field -> PR #4 trades.csv field; every value the viewer draws or reports per trade
+TRADE_FIELDS = {"signal_bar_start_utc": "signal_bar_start_utc", "entry_first_fill_utc": "entry_first_fill_utc",
+                "entry_price": "entry_price", "filled_qty": "qty", "requested_qty": "requested_qty",
+                "exit_trigger_utc": "exit_trigger_utc", "exit_last_fill_utc": "exit_last_fill_utc",
+                "exit_reason": "exit_reason", "exit_complete": "exit_complete", "exit_qty": "exit_qty",
+                "remaining_qty": "remaining_qty", "exit_price": "exit_price", "net_usd": "net_usd",
+                "realized_usd": "realized_net_usd", "mark_price": "mark_price", "r_multiple": "r_multiple"}
+
+
+def _value_eq(a: str, b: str) -> bool:
+    """Ledger values as written by different CSV writers: timestamps by instant, numbers to 1e-9, empty = nan."""
+    if a == b:
+        return True
+    if a[:4].isdigit() and b[:4].isdigit() and "T" in a and "T" in b:
+        return _t(a) == _t(b)
+    try:
+        fa, fb = _f(a), _f(b)
+    except ValueError:
+        return False
+    if fa is None or fb is None:
+        return fa is None and fb is None
+    return abs(fa - fb) <= 1e-9 * max(1.0, abs(fb))
+
+
+def cross_check_ledgers(dataset: Path, sample: str, signals: list[dict[str, str]],
+                        trades: list[dict[str, str]], limit: int = 10) -> list[str]:
+    """Every displayed ledger row must match the hash-verified PR #4 rows it was derived from: trades against
+    trades.csv (fills, quantities, exit, mark, P&L), signals against attempts.csv and breakout_matches.csv."""
+    bt = dataset / "backtest" / sample / SCENARIO
+    pr4 = {(r["symbol"], r["signal_available_utc"]): r for r in read_table(bt / "trades.csv")}
+    attempts = {(r["symbol"], r["signal_available_utc"]) for r in read_table(bt / "attempts.csv")}
+    prices = {(r["symbol"], r["sip_signal_available_utc"] or ""): r.get("sip_price", "")
+              for r in read_table(dataset / "breakout_matches.csv") if r.get("sample") == sample}
+    out: list[str] = []
+    if {(r["symbol"], r["signal_available_utc"]) for r in trades} != set(pr4):
+        out.append("trade_ledger.csv and the PR #4 trades.csv list different trades")
+    for r in trades:
+        p4 = pr4.get((r["symbol"], r["signal_available_utc"]))
+        for a, b in TRADE_FIELDS.items():
+            if p4 is not None and a in r and not _value_eq(r[a], p4[b]):
+                out.append(f"trade_ledger.csv {r['symbol']} {r['signal_available_utc']}: {a}={r[a]!r} but the "
+                           f"PR #4 trades.csv has {b}={p4[b]!r}")
+    if {(r["symbol"], r["signal_available_utc"]) for r in signals} != attempts:
+        out.append("signal_ledger.csv and the PR #4 attempts.csv list different signals")
+    for r in signals:
+        px = prices.get((r["symbol"], r["signal_available_utc"]))
+        if px and r.get("price") and not _value_eq(r["price"], px):
+            out.append(f"signal_ledger.csv {r['symbol']} {r['signal_available_utc']}: price {r['price']} but "
+                       f"breakout_matches.csv has {px}")
+    return out[:limit] + ([f"... and {len(out) - limit} more ledger differences"] if len(out) > limit else [])
+
+
+def ledger_totals(signals: list[dict[str, str]], trades: list[dict[str, str]]) -> dict[str, object]:
+    """Sample totals as the viewer derives them from the PR #5 ledgers."""
+    done = [t for t in trades if _f(t["r_multiple"]) is not None]
+    open_ = [t for t in trades if _f(t["r_multiple"]) is None]
+    return {"signals": len(signals), "entries": len(trades), "completed": len(done), "incomplete": len(open_),
+            "net_usd_completed": sum(float(t["net_usd"]) for t in done),
+            "realized_usd_incomplete": sum(float(t["realized_usd"]) for t in open_),
+            "marked_usd_incomplete": sum(float(t["marked_usd"]) for t in open_ if _f(t.get("marked_usd")) is not None),
+            "unmarked": sum(1 for t in open_ if _f(t.get("marked_usd")) is None),
+            "shares_unsold": sum(int(t["remaining_qty"]) for t in open_)}
+
+
+def summary_totals(res: Mapping[str, object]) -> dict[str, object]:
+    """The same totals from a PR #4 backtest summary (``results[scenario]['all']``)."""
+    ie: Mapping[str, object] = res["incomplete_exits"]  # type: ignore[assignment]
+    return {"signals": res["signals"], "entries": res["entries"], "completed": res["trades"], "incomplete": ie["count"],
+            "net_usd_completed": res["net_usd"], "realized_usd_incomplete": ie["realized_net_usd"],
+            "marked_usd_incomplete": ie["unrealized_mark_usd"], "unmarked": ie["unmarked"],
+            "shares_unsold": ie["shares_unsold"]}
+
+
+def _same(a: object, b: object) -> bool:
+    return abs(float(a) - float(b)) <= 1e-6 if isinstance(a, float) or isinstance(b, float) else a == b  # type: ignore[arg-type]
 
 
 # ---------- replay tables ----------
@@ -218,6 +335,7 @@ class ReplayTables:
     signals: dict[tuple[str, str], list[dict[str, str]]]
     trades: dict[tuple[str, str], list[dict[str, str]]]
     candidates: dict[tuple[str, str], list[dict[str, str]]]
+    days: list[str] = field(default_factory=list)  # every trading day of the validated samples
 
     @property
     def as_of(self) -> datetime:
@@ -231,8 +349,8 @@ class ReplayTables:
         return "outside dataset"
 
     def dates(self) -> list[str]:
-        """Trading dates with validated ledgers, oldest first."""
-        return sorted({d for d, _ in self.signals})
+        """Every trading date of the validated samples (with or without signals), oldest first."""
+        return self.days
 
     @classmethod
     def load(cls, dataset: Path) -> ReplayTables:
@@ -251,17 +369,32 @@ class ReplayTables:
             sig += read_table(ledger_dir(dataset, s) / "signal_ledger.csv")
             if (ledger_dir(dataset, s) / "trade_ledger.csv").is_file():
                 trd += read_table(ledger_dir(dataset, s) / "trade_ledger.csv")
-        dates = {r["trading_date"] for r in sig}
+        days = sorted({d for s in ok for d in sample_dates(manifest, s, set())} | {r["trading_date"] for r in sig})
+        wanted = set(days)
         cand = [{**r, "bar_start_utc": datetime.fromisoformat(r["bar_start_utc"]).isoformat(),
                  "observed_at_utc": datetime.fromisoformat(r["observed_at_utc"]).isoformat()}
-                for r in read_table(dataset / "candidates.csv.gz") if r["feed"] == "sip" and r["trading_date"] in dates] \
+                for r in read_table(dataset / "candidates.csv.gz") if r["feed"] == "sip" and r["trading_date"] in wanted] \
             if (dataset / "candidates.csv.gz").is_file() else []
-        return cls(manifest, checks, group_by_session(sig), group_by_session(trd), group_by_session(cand))
+        return cls(manifest, checks, group_by_session(sig), group_by_session(trd), group_by_session(cand), days)
+
+    def bar_file_check(self, dataset: Path, d: str, session: str) -> Path | None:
+        """The session's bar file after checking it against the recorded hash (when the record covers it).
+        Raises BarCacheError if it was edited or replaced since the diagnostics run."""
+        path = session_bar_file(dataset, d, session)
+        chk = self.checks.get(self.sample_of(d))
+        if path is None or chk is None or chk.bar_hashes is None:
+            return path
+        recorded = chk.bar_hashes.get(path.name)
+        if recorded is None or hash_check(path, recorded, chk.diagnostics["provenance"].get("hash_policy")) != "ok":
+            raise BarCacheError(f"cached SIP bars {path.name} differ from the diagnostics provenance record; "
+                                "they were edited or replaced after the run")
+        return path
 
     def session(self, dataset: Path, d: str, session: str) -> SessionData:
         """One session's data; bars are read from the SIP cache only now. Raises FileNotFoundError if absent."""
         key = (d, session)
         signals, trades, cands = self.signals.get(key, []), self.trades.get(key, []), self.candidates.get(key, [])
+        self.bar_file_check(dataset, d, session)
         bars = load_session_bars(dataset, d, session, self.as_of)
         if bars is None:
             raise FileNotFoundError(f"no cached SIP bars for {d} {session}")
@@ -454,6 +587,7 @@ def daily_summary(tables: ReplayTables, d: str, session: str | None = None) -> d
             "net_usd_completed": sum(float(t["net_usd"]) for t in done),
             "realized_usd_incomplete": sum(float(t["realized_usd"]) for t in open_),
             "marked_usd_incomplete": None if unmarked else sum(float(t["marked_usd"]) for t in open_),
+            "marked_usd_known": sum(float(t["marked_usd"]) for t in open_ if _f(t.get("marked_usd")) is not None),
             "unmarked_incomplete_exits": unmarked,
             "outcomes": dict(sorted(Counter(r["outcome"] for r in sig).items()))}
 
@@ -481,4 +615,141 @@ def session_warnings(data: SessionData) -> list[str]:
     if thin:
         out.append(f"Sparse bars (fewer than half the session's {w.minutes} minutes traded): {', '.join(thin)}. "
                    "Empty minutes are shown as gaps.")
+    return out
+
+
+# ---------- audit: what the viewer shows vs the PR #4 backtest ledgers ----------
+
+def _px_eq(a: object, b: object) -> bool:
+    fa, fb = (_f(str(v)) if v is not None else None for v in (a, b))
+    return (fa is None and fb is None) or (fa is not None and fb is not None and abs(fa - fb) <= 1e-9 * max(1.0, abs(fb)))
+
+
+def audit(dataset: Path, tables: ReplayTables | None = None, strat: StrategyConfig = StrategyConfig()) -> dict[str, object]:
+    """Cross-check everything the viewer displays for the validated samples, offline.
+
+    Totals are compared three ways against the backtest summary: the viewer's ledgers, the sum of its daily
+    summaries, and the PR #4 trades.csv / attempts.csv. Every chart marker of every session is compared with
+    the PR #4 trade or signal row it claims to show: trigger candle (present, close = signal price), signal
+    availability (bar close), entry and exit fills (time, price), stop and target levels, and the unsold
+    remainder of incomplete exits (mark time and price). Candles must lie in the session and be complete."""
+    t = tables or ReplayTables.load(dataset)
+    bad: list[str] = []
+    markers: Counter[str] = Counter()
+    sessions: Counter[str] = Counter()
+    out: dict[str, object] = {"dataset": dataset.as_posix(), "samples": {}}
+    for smp, chk in t.checks.items():
+        if chk.status != "ok":
+            out["samples"][smp] = {"status": chk.status}  # type: ignore[index]
+            continue
+        days = [d for d in t.dates() if t.sample_of(d) == smp]
+        bt = dataset / "backtest" / smp / SCENARIO
+        pr4 = {(r["symbol"], r["signal_available_utc"]): r for r in read_table(bt / "trades.csv")}
+        attempts = {(r["symbol"], r["signal_available_utc"]): r for r in read_table(bt / "attempts.csv")}
+        want = summary_totals(read_json(dataset / f"backtest_summary_{smp}.json")["results"][SCENARIO]["all"])
+        sig = [r for d in days for s in SESSIONS for r in t.signals.get((d, s), [])]
+        trd = [r for d in days for s in SESSIONS for r in t.trades.get((d, s), [])]
+        daily = [daily_summary(t, d) for d in days]
+        p4_open = [r for r in pr4.values() if r["exit_complete"] != "True"]
+        views = {
+            "viewer_ledgers": ledger_totals(sig, trd),
+            "viewer_daily_sum": {"signals": sum(x["signals"] for x in daily), "entries": sum(x["entries"] for x in daily),
+                                 "completed": sum(x["completed_trades"] for x in daily),
+                                 "incomplete": sum(x["incomplete_exits"] for x in daily),
+                                 "net_usd_completed": sum(x["net_usd_completed"] for x in daily),
+                                 "realized_usd_incomplete": sum(x["realized_usd_incomplete"] for x in daily),
+                                 "marked_usd_incomplete": sum(x["marked_usd_known"] for x in daily),
+                                 "unmarked": sum(x["unmarked_incomplete_exits"] for x in daily)},
+            "pr4_trades_csv": {"signals": len(attempts), "entries": len(pr4), "completed": len(pr4) - len(p4_open),
+                               "incomplete": len(p4_open),
+                               "net_usd_completed": sum(float(r["net_usd"]) for r in pr4.values() if r["exit_complete"] == "True"),
+                               "realized_usd_incomplete": sum(float(r["realized_net_usd"]) for r in p4_open),
+                               "marked_usd_incomplete": sum(float(r["unrealized_usd"]) for r in p4_open
+                                                            if _f(r["mark_price"]) is not None),
+                               "unmarked": sum(1 for r in p4_open if _f(r["mark_price"]) is None),
+                               "shares_unsold": sum(int(r["remaining_qty"]) for r in p4_open)},
+        }
+        for name, got in views.items():
+            for k, v in got.items():
+                if not _same(v, want[k]):
+                    bad.append(f"{smp} {name}: {k} {v} vs backtest summary {want[k]}")
+        for d in days:
+            for s in SESSIONS:
+                key = (d, s)
+                try:
+                    data = t.session(dataset, d, s)
+                except FileNotFoundError:
+                    sessions["without_bar_file"] += 1
+                    if t.signals.get(key):
+                        bad.append(f"{d} {s}: {len(t.signals[key])} signals but no cached bars")
+                    continue
+                sessions["loaded"] += 1
+                sessions["without_signals"] += not data.signals
+                sessions["without_trades"] += not data.trades
+                w = session_windows(date.fromisoformat(d))[s]
+                for sym in data.chart_symbols:
+                    bs = data.bars.get(sym, [])
+                    markers["candles"] += len(bs)
+                    if [b.timestamp_utc for b in bs] != sorted({b.timestamp_utc for b in bs}) or any(
+                            not w.start_utc <= b.timestamp_utc < w.end_utc or b.timestamp_utc + timedelta(minutes=1) > t.as_of
+                            for b in bs):
+                        bad.append(f"{d} {s} {sym}: candles out of order, outside the session or incomplete")
+                ev_of = {sym: chart_events(data, sym, strat) for sym in {r["symbol"] for r in (*data.signals, *data.trades)}}
+                for r in data.signals:
+                    sym, bar0, avail = r["symbol"], _t(r["signal_bar_start_utc"]), _t(r["signal_available_utc"])
+                    tag = f"{d} {s} {sym} signal {r['signal_available_utc']}"
+                    markers["signals"] += 1
+                    if (sym, r["signal_available_utc"]) not in attempts:
+                        bad.append(f"{tag}: not in PR #4 attempts.csv")
+                    if avail is None or bar0 is None or avail - bar0 != timedelta(minutes=1):
+                        bad.append(f"{tag}: available {avail} is not the trigger candle's close ({bar0} + 1 min)")
+                    if sum(1 for e in ev_of[sym] if str(e["kind"]).startswith("signal_") and _t(e["t"]) == bar0) != 1:
+                        bad.append(f"{tag}: no single signal marker on the trigger candle")
+                    candle = next((b for b in data.bars.get(sym, []) if b.timestamp_utc == bar0), None)
+                    markers["trigger_candles"] += 1
+                    if candle is None:
+                        bad.append(f"{tag}: trigger candle missing from the cached bars")
+                    elif _f(r.get("price")) is not None and not _px_eq(candle.close, r["price"]):
+                        bad.append(f"{tag}: trigger candle closed {candle.close}, signal price {r['price']}")
+                for r in data.trades:
+                    sym = r["symbol"]
+                    tag = f"{d} {s} {sym} trade {r['signal_available_utc']}"
+                    p4 = pr4.get((sym, r["signal_available_utc"]))
+                    if p4 is None:
+                        bad.append(f"{tag}: not in PR #4 trades.csv")
+                        continue
+                    for a, b in (("filled_qty", "qty"), ("exit_qty", "exit_qty"), ("remaining_qty", "remaining_qty"),
+                                 ("exit_reason", "exit_reason"), ("exit_complete", "exit_complete")):
+                        if r[a] != p4[b]:
+                            bad.append(f"{tag}: ledger {a}={r[a]} but PR #4 {b}={p4[b]}")
+                    if (_f(r["net_usd"]) is None) != (p4["exit_complete"] != "True"):
+                        bad.append(f"{tag}: net P&L shown for an incomplete exit, or missing for a completed one")
+                    entry, fill = float(p4["entry_price"]), _t(p4["entry_first_fill_utc"])
+                    if fill is None or fill < _t(p4["signal_available_utc"]):  # type: ignore[operator]
+                        bad.append(f"{tag}: entry fill before the signal existed")
+                    expect = [("entry_fill", fill, entry, None),
+                              ("stop", fill, entry * (1 - strat.stop_pct), _t(p4["exit_trigger_utc"])),
+                              ("target", fill, entry * (1 + strat.stop_pct * strat.target_r), _t(p4["exit_trigger_utc"]))]
+                    if int(p4["exit_qty"]):
+                        expect.append(("exit_fill", _t(p4["exit_last_fill_utc"]), float(p4["exit_price"]), None))
+                    if int(p4["remaining_qty"]):
+                        expect.append(("unsold_remainder", _t(p4["mark_utc"]), _f(p4["mark_price"]), None))
+                    for kind, at, px, end in expect:
+                        markers[kind] += 1
+                        hit = [e for e in ev_of[sym] if e["kind"] == kind and _t(e["t"]) == at and _px_eq(e.get("price"), px)
+                               and (end is None or _t(e.get("t_end")) == end)]
+                        if len(hit) != 1:
+                            bad.append(f"{tag}: {kind} marker at {at} price {px} found {len(hit)} times")
+                for sym, ev in ev_of.items():  # nothing drawn that no recorded trade explains
+                    n = sum(1 for r in data.trades if r["symbol"] == sym)
+                    p4s = [pr4.get((sym, r["signal_available_utc"])) for r in data.trades if r["symbol"] == sym]
+                    want_n = {"entry_fill": n, "stop": n, "target": n,
+                              "exit_fill": sum(1 for p in p4s if p and int(p["exit_qty"])),
+                              "unsold_remainder": sum(1 for p in p4s if p and int(p["remaining_qty"]))}
+                    for kind, k in want_n.items():
+                        if sum(1 for e in ev if e["kind"] == kind) != k:
+                            bad.append(f"{d} {s} {sym}: {sum(1 for e in ev if e['kind'] == kind)} {kind} markers for {k} trades")
+        out["samples"][smp] = {"status": "ok", "dates": len(days), "summary": want, **views}  # type: ignore[index]
+    out.update(sessions=dict(sessions), markers=dict(markers), markers_checked=sum(markers.values()),
+               mismatch_count=len(bad), mismatches=bad[:200])
     return out
