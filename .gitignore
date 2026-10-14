@@ -18,3 +18,5 @@ reports/datasets/*/*
 !reports/datasets/*/backtest_summary_*.json
 !reports/datasets/*/diagnostics_*.json
 !reports/datasets/*/diagnostics_*.md
+!reports/datasets/*/research_comparison_*.json
+!reports/datasets/*/research_comparison_*.md

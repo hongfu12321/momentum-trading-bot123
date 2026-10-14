@@ -231,6 +231,10 @@ Raw bars, quotes, per-symbol tables and input snapshots are Alpaca or third-part
 
 No code path places, replaces or cancels orders; the backtest is an offline simulation with no broker client. Market data comes from `data.alpaca.markets`. The only trading-host call is the read-only `GET /v2/assets` on `paper-api.alpaca.markets`, which refuses live-looking keys. A test enforces both.
 
+## Top 5 research (exploratory, in-sample only)
+
+`m2-research --dataset <dataset>` ranks the Top 5 gainers within the dataset's cached sub-$20 universe after every completed 1-minute bar (point in time, never market-wide) and backtests a Top 5 filtered variant of the baseline with the frozen `base_cap50` model. It refuses the out-of-sample block and fails unless the baseline rerun reproduces the PR #4 ledgers byte for byte. The committed `research_comparison_in_sample.{json,md}` are aggregate only. Method: `docs/m2_top5_research.md`. Results: `reports/m2_top5.md`.
+
 ## Tests
 
 ```bash
