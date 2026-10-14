@@ -1,8 +1,8 @@
-"""M2 research: point-in-time Top 5 gainers within the cached universe, and a Top 5 filtered variant.
+"""M2 research: point-in-time Top 5 gainers within the cached universe, and two strategy variants.
 
 Exploratory hypotheses, evaluated on in-sample days only. The baseline breakout strategy, its risk
-settings, execution model and frozen 50 bps configuration are reused unchanged; the variant only
-changes which completed-bar signals reach the existing backtester.
+settings, execution model and frozen 50 bps configuration are reused unchanged; the variants only
+change which completed-bar signals reach the existing backtester.
 
 Point-in-time rules:
 - The ranking snapshot of the bar starting at t uses only bars that started at or before t. It is
@@ -10,6 +10,7 @@ Point-in-time rules:
 - A symbol's price is its last completed-bar close. Its change is measured against the reference
   close the dataset already used (previous official close for premarket, same day's official
   close after hours, split-adjusted on ex-dates).
+- The Bull Flag detector (bullflag.py) evaluated at bar i reads bars[: i + 1] only.
 
 Coverage limit: the dataset fetched bars only for symbols whose reference close was low enough to
 reach the scanner's price band (about $18.2 premarket, $19.0 after hours). The ranking is therefore
@@ -33,15 +34,17 @@ from .backtest import (
     with_spread_caps, write_rows,
 )
 from .compare import ScanParams
-from .data.market_calendar import AFTERHOURS, EXTENDED_SESSIONS, SessionWindow, session_windows
+from .data.market_calendar import AFTERHOURS, EXTENDED_SESSIONS, PREMARKET, SessionWindow, session_windows
 from .data.normalize import BAR_LENGTH, normalize
 from .data.provider import Bar
+from .bullflag import FlagParams, detect_flags, flag_params_record, session_volumes
 from .dataset import _read_bars
 from .split import IN_SAMPLE
 
-STRATEGIES = ("hos", "top5_hos")
+STRATEGIES = ("hos", "top5_hos", "top5_bullflag")
 # "Top 5" is ranked within the dataset's cached sub-$20 universe, never the market-wide gainers list.
-STRATEGY_LABELS = {"hos": "Original HOS Breakout", "top5_hos": "Top 5 (cached universe) HOS Breakout"}
+STRATEGY_LABELS = {"hos": "Original HOS Breakout", "top5_hos": "Top 5 (cached universe) HOS Breakout",
+                   "top5_bullflag": "Top 5 (cached universe) + Bull Flag Breakout"}
 SCENARIO = "base_cap50"  # the frozen configuration from reports/m2_backtest.md
 
 
@@ -138,6 +141,27 @@ def rank_lookup(snapshots: Iterable[Mapping[str, object]]) -> dict[tuple[str, st
     return {(str(r["symbol"]), str(r["bar_start_utc"])): int(r["rank"]) for r in snapshots}  # type: ignore[call-overload]
 
 
+def bar_context(bars: list[Bar], ref: float, window: SessionWindow, scan: ScanParams) -> dict[str, dict[str, object]]:
+    """Scanner state at each bar (keyed by bar start), from that bar and earlier ones only."""
+    vols = session_volumes(bars, window, scan.exclude_closing_auction_bar)
+    min_change = scan.premarket_min_change if window.name == PREMARKET else scan.afterhours_min_change
+    out: dict[str, dict[str, object]] = {}
+    cum, high = 0, float("-inf")
+    for i, b in enumerate(bars):
+        cum += vols[i]
+        change = b.close / ref - 1
+        prior = vols[max(0, i - scan.breakout_lookback) : i]
+        out[_iso(b.timestamp_utc)] = {
+            "change_vs_ref": change, "session_volume": cum,
+            "volume_ratio": vols[i] / fmean(prior) if len(prior) == scan.breakout_lookback and fmean(prior) > 0 else None,
+            "prior_session_high": high if i else None,
+            "candidate_gate": scan.min_price <= b.close <= scan.max_price and change >= min_change
+            and cum >= scan.min_session_volume,
+        }
+        high = max(high, b.high)
+    return out
+
+
 # ---------- local data access ----------
 
 def session_bar_file(dataset: Path, d: str, session: str) -> Path | None:
@@ -187,18 +211,31 @@ def write_table(path: Path, rows: list[dict[str, object]]) -> None:
 
 # ---------- signal sets ----------
 
+def _signal_row(sym: str, d: str, session: str, sample: str, bar_start: str, available: str, price: float,
+                ctx: Mapping[str, object], **extra: object) -> dict[str, object]:
+    """A row in the breakout_matches.csv schema, so the existing backtester and diagnostics read it as is."""
+    return {"kind": "breakout", "symbol": sym, "trading_date": d, "session": session, "match": "sip_only",
+            "sip_bar_start_utc": bar_start, "sip_signal_available_utc": available, "sip_price": price,
+            "sip_change_vs_ref": ctx["change_vs_ref"], "sip_session_volume": ctx["session_volume"],
+            "sip_volume_ratio": ctx["volume_ratio"], "sip_prior_session_high": ctx["prior_session_high"],
+            "sip_candidate_gate": ctx["candidate_gate"], "sample": sample, **extra}
+
+
 @dataclass(slots=True)
 class SessionResearch:
     ranking: Ranking
+    flags: list[dict[str, object]]
     signals: dict[str, list[dict[str, object]]]  # strategy -> signal rows
     filtered: list[dict[str, object]]  # signals a variant did not pass to the backtester, with the reason
 
 
 def research_session(window: SessionWindow, bars: Mapping[str, list[Bar]], refs: Mapping[str, float],
-                     hos_rows: list[Mapping[str, str]], sample: str, scan: ScanParams) -> SessionResearch:
+                     hos_rows: list[Mapping[str, str]], sample: str, scan: ScanParams,
+                     flag_params: FlagParams = FlagParams()) -> SessionResearch:
     d, session = window.trading_date.isoformat(), window.name
     ranking = rank_session(window, bars, refs, RankParams.from_scan(scan))
     rank = rank_lookup(ranking.snapshots)
+    members = sorted({str(r["symbol"]) for r in ranking.snapshots})
     signals: dict[str, list[dict[str, object]]] = {k: [] for k in STRATEGIES}
     filtered: list[dict[str, object]] = []
     for r in hos_rows:  # the baseline's candidate-gated session-high breakouts, unchanged
@@ -211,7 +248,28 @@ def research_session(window: SessionWindow, bars: Mapping[str, list[Bar]], refs:
                              "outcome": "filtered", "reason": "not_in_top5"})
         else:
             signals["top5_hos"].append({**r, "top5_rank": k})
-    return SessionResearch(ranking, signals, filtered)
+    flags: list[dict[str, object]] = []
+    for sym in members:
+        rows = bars.get(sym, [])
+        ctx = bar_context(rows, refs[sym], window, scan)
+        for f in detect_flags(rows, window, flag_params):
+            t = str(f["breakout_bar_start_utc"])
+            k = rank.get((sym, t))
+            c = ctx[t]
+            rec = {"symbol": sym, "trading_date": d, "session": session, "sample": sample, **f, "top5_rank": k,
+                   "candidate_gate": c["candidate_gate"], "change_pct": float(c["change_vs_ref"]) * 100}  # type: ignore[arg-type]
+            flags.append(rec)
+            why = (str(f["reason"]) if not f["qualified"] else "not_in_top5" if k is None
+                   else "candidate_gate_failed" if not c["candidate_gate"] else None)
+            if why is None:
+                signals["top5_bullflag"].append(_signal_row(sym, d, session, sample, t, str(f["available_utc"]),
+                                                            float(f["breakout_price"]), c, top5_rank=k))  # type: ignore[arg-type]
+            elif f["qualified"] or k is not None:  # flag attempts of a current Top 5 member, or qualified flags
+                filtered.append({"strategy": "top5_bullflag", "trigger": "bull_flag", "symbol": sym, "trading_date": d,
+                                 "session": session, "signal_bar_start_utc": t,
+                                 "signal_available_utc": f["available_utc"], "top5_rank": k,
+                                 "outcome": "filtered", "reason": why})
+    return SessionResearch(ranking, flags, signals, filtered)
 
 
 # ---------- pipeline ----------
@@ -222,9 +280,9 @@ def sample_days(manifest: Mapping[str, object], sample: str) -> list[str]:
 
 
 def build(dataset: Path, sample: str = IN_SAMPLE, log: Callable[[str], None] = print) -> dict[str, object]:
-    """Rankings and signal sets for every session of the sample, from local data only."""
+    """Rankings, flags and signal sets for every session of the sample, from local data only."""
     if sample != IN_SAMPLE:
-        raise ValueError("the Top 5 variant is exploratory: in-sample only; "
+        raise ValueError("the Top 5 and Bull Flag variants are exploratory: in-sample only; "
                          "validate on fresh trading days after the dataset end, never on the inspected hold-out")
     manifest = json.loads((dataset / "manifest.json").read_text(encoding="utf-8"))
     as_of = datetime.fromisoformat(manifest["as_of_utc"])
@@ -249,11 +307,12 @@ def build(dataset: Path, sample: str = IN_SAMPLE, log: Callable[[str], None] = p
             tables["top5_snapshots"] += res.ranking.snapshots
             tables["top5_changes"] += res.ranking.changes
             tables["coverage"].append(res.ranking.coverage)
+            tables["bullflag_candidates"] += res.flags
             tables["filtered"] += res.filtered
             for k in STRATEGIES:
                 signals[k] += res.signals[k]
         log(f"{d}: " + ", ".join(f"{k} {len(v)}" for k, v in signals.items()))
-    for name in ("top5_snapshots", "top5_changes", "filtered"):
+    for name in ("top5_snapshots", "top5_changes", "bullflag_candidates", "filtered"):
         write_table(out / f"{name}.csv.gz", tables[name])
     write_table(out / "top5_coverage.csv", tables["coverage"])
     for k in STRATEGIES:
@@ -341,6 +400,7 @@ def compare(dataset: Path, results: Mapping[str, BacktestResult], sample: str = 
     """Aggregate, symbol-free comparison of the three strategies on the same sessions."""
     base = dataset / "research" / sample
     coverage = read_table(base / "top5_coverage.csv")
+    flags = read_table(base / "bullflag_candidates.csv.gz")
     filtered = read_table(base / "filtered.csv.gz")
     found = [r for r in coverage if r["bars_file"] == "found"]
     short_key = next((k for k in found[0] if k.startswith("minutes_with_fewer")), "") if found else ""
@@ -366,6 +426,10 @@ def compare(dataset: Path, results: Mapping[str, BacktestResult], sample: str = 
             "minutes_with_fewer_than_5_ranked": sum(int(r[short_key]) for r in found) if short_key else None,
             "mean_distinct_members_per_session": fmean(int(r["distinct_top_members"]) for r in found) if found else None,
         },
+        "bull_flag": {"params": flag_params_record(), "attempts_evaluated": len(flags),
+                      "qualified": sum(1 for r in flags if r["qualified"] == "True"),
+                      "qualified_in_top5_and_gated": len(read_table(base / "signals_top5_bullflag.csv")),
+                      "first_failed_rule": dict(Counter(r["reason"] for r in flags).most_common())},
         "strategies": strategies,
         "execution_consistency": _consistency(results),
     }
@@ -383,7 +447,7 @@ def decisions(dataset: Path, sample: str = IN_SAMPLE) -> list[dict[str, object]]
             continue
         ranks = {(r["symbol"], r["sip_bar_start_utc"]): r.get("top5_rank") for r in read_table(base / f"signals_{k}.csv")}
         for r in read_table(ledger):
-            rows.append({"strategy": k, "trigger": "hos_breakout",
+            rows.append({"strategy": k, "trigger": "bull_flag" if k == "top5_bullflag" else "hos_breakout",
                          "symbol": r["symbol"], "trading_date": r["trading_date"], "session": r["session"],
                          "signal_bar_start_utc": r["signal_bar_start_utc"],
                          "signal_available_utc": r["signal_available_utc"],
@@ -405,6 +469,7 @@ def render_comparison(c: Mapping[str, object]) -> str:
     """Generated aggregate report (no symbols, no per-trade rows)."""
     st: Mapping[str, Mapping] = c["strategies"]  # type: ignore[assignment]
     t5: Mapping[str, object] = c["top5"]  # type: ignore[assignment]
+    bf: Mapping[str, object] = c["bull_flag"]  # type: ignore[assignment]
     ses: Mapping[str, object] = c["sessions"]  # type: ignore[assignment]
     L = [f"# Strategy comparison: {c['sample']}, {c['scenario']} (generated)", "",
          f"Status: **{c['status']}**. Simulated fills against cached historical SIP quotes; 0 orders. "
@@ -440,8 +505,13 @@ def render_comparison(c: Mapping[str, object]) -> str:
           f"Mean eligible symbols per session {_f(t5['mean_eligible_symbols'], 0)}, with at least one bar "
           f"{_f(t5['mean_symbols_with_bars'], 0)}. Minutes with fewer than 5 ranked symbols: "
           f"{t5['minutes_with_fewer_than_5_ranked']} of {t5['minutes']}. Mean distinct Top 5 members per session: "
-          f"{_f(t5['mean_distinct_members_per_session'], 1)}.", ""]
+          f"{_f(t5['mean_distinct_members_per_session'], 1)}.", "",
+          "## Bull Flag detector", "", f"Parameters: `{json.dumps(bf['params'])}`.", "",
+          f"Breakout attempts evaluated on Top 5 members: {bf['attempts_evaluated']}; qualified flags: {bf['qualified']}; "
+          f"qualified while in the Top 5 and passing the scanner gate: {bf['qualified_in_top5_and_gated']}.", "",
+          "| first failed rule | attempts |", "|---|---:|"]
     L[3:3] = ["Win rate, average R, net P&L and profit factor use completed trades only. Incomplete exits (unsold "
               "shares when the 2-minute exit window ended) are counted as entries and reported apart, never as P&L.", ""]
+    L += [f"| {k} | {n} |" for k, n in bf["first_failed_rule"].items()]  # type: ignore[union-attr]
     return "\n".join(L) + "\n"
 

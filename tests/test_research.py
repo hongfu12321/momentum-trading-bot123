@@ -125,9 +125,10 @@ def test_build_marks_missing_sessions_and_drops_incomplete_bars(tmp_path) -> Non
     assert {(r["session"], r["bars_file"]) for r in cov} == {("premarket", "found"), ("afterhours", "missing")}
     snaps = rs.read_table(ds / "research" / "in_sample" / "top5_snapshots.csv.gz")
     assert "2.15" not in {r["price"] for r in snaps}  # the incomplete 04:08 candle never reaches a ranking
-    assert out["signals"] == {"hos": 1, "top5_hos": 1}  # ranked on the 04:07 close: the 04:08 bar was incomplete
+    assert out["signals"] == {"hos": 1, "top5_hos": 1, "top5_bullflag": 0}  # ranked on the 04:07 close: the 04:08
+    # bar was incomplete, so no Bull Flag breakout on it
     complete = rs.build(_mini_dataset(tmp_path, et(DAY, "05:00")), log=lambda _: None)
-    assert complete["signals"] == {"hos": 1, "top5_hos": 1}
+    assert complete["signals"] == {"hos": 1, "top5_hos": 1, "top5_bullflag": 1}
 
 
 def test_variants_refuse_the_out_of_sample_block(tmp_path) -> None:  # noqa: ANN001
@@ -151,8 +152,9 @@ def test_execution_consistency_compares_common_signals() -> None:
     var = BacktestResult("base_cap50", [_trade("A", "t1", 2.0)],
                          [Attempt("A", "d", "premarket", "in_sample", "base_cap50", "t1", "filled"),
                           Attempt("B", "d", "premarket", "in_sample", "base_cap50", "t2", "non_fill", "at_signal_x")])
-    out = rs._consistency({"hos": base, "top5_hos": var})
+    out = rs._consistency({"hos": base, "top5_hos": var, "top5_bullflag": var})
     assert out["top5_hos"] == {"common_evaluated_signals": 1, "identical_outcomes": 1}  # skipped B is not common
     unsold = BacktestResult("base_cap50", [_trade("A", "t1", 2.0, sold=0)], base.attempts[:1])
-    assert rs._consistency({"hos": unsold, "top5_hos": unsold})["top5_hos"]["identical_outcomes"] == 1  # nan exit price
-    assert rs._consistency({"hos": unsold, "top5_hos": var})["top5_hos"]["identical_outcomes"] == 0
+    out = rs._consistency({"hos": unsold, "top5_hos": unsold, "top5_bullflag": var})
+    assert out["top5_hos"]["identical_outcomes"] == 1  # a nan exit price (nothing sold) still compares equal
+    assert out["top5_bullflag"]["identical_outcomes"] == 0
