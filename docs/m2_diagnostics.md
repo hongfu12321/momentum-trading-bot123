@@ -19,6 +19,26 @@ momentum-bot m2-diagnostics --dataset reports/datasets/m2_sip_20260603_20261009 
 
 To replay a case, open the files named in `quote_files` under `cache/backtest_quotes/`. Each is gzip JSON lines of raw Alpaca SIP quotes.
 
+## Input validation and provenance
+
+Before writing anything, `m2-diagnostics` checks that its inputs belong together. It stops with an error listing every problem, and writes no report, when:
+- **Missing inputs:** `manifest.json`, `breakout_matches.csv`, `backtest_summary_<sample>.json` or the scenario's `trades.csv` / `attempts.csv` is missing.
+- **Wrong run:** the summary is for another sample, or has no results for the scenario.
+- **Old model:** the ledger columns differ from the current execution model, for example ledgers written before the PR #4 incomplete-exit fix.
+- **Mixed runs:** ledger rows carry another sample or scenario, or trades and filled or partial attempts do not pair one to one.
+- **Changed dataset:** the dataset's signals for the sample differ from the ones the backtest run evaluated.
+- **Changed settings:** a strategy, risk, fee or scenario setting recorded by the backtest run differs from the current code.
+- **Edited ledgers:** the ledgers do not reproduce the summary's results exactly. Their P&L, R, fills and skips are recomputed with the current summary code.
+
+Cached quotes are not a required input. A missing quote file still leaves the affected fields empty, never estimated.
+
+Each generated report records its provenance in a `provenance` block (JSON) and a Provenance section (Markdown):
+- **Generating commit:** `code_sha` is the commit that generated the file. Later commits that do not rerun `m2-diagnostics` leave it unchanged, so it can be older than the repository HEAD.
+- **Dataset identity:** the manifest's sha256 and build time, the `breakout_matches.csv` sha256, and the input snapshot hashes from the manifest.
+- **Backtest run:** the summary file and its sha256, `code_sha` and timestamp, plus the sha256 and row count of each ledger.
+- **Configuration:** the strategy, risk, fee and scenario settings as recorded by that run.
+- **Unrecorded fields:** fields in the current code that the run did not record. The current `strategy.entry_trigger` label (`candle_close_confirmation`) was added after the PR #4 reruns.
+
 ## Research-integrity rules built in
 
 - **Entry-time features** come from the trigger bar and earlier data, plus the quote prevailing at signal time. Only these may motivate a future entry filter. Post-entry fields explain outcomes and must not be used as filters.
