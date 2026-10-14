@@ -580,18 +580,25 @@ def load_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(fh))
 
 
-def run(dataset: Path, sample: str, scenario: str) -> dict[str, object]:
-    """Build ledgers, summary and local outputs for one sample and scenario. Cache-only; no network."""
-    bt = dataset / "backtest" / sample / scenario
+def run(dataset: Path, sample: str, scenario: str, strategy: str | None = None) -> dict[str, object]:
+    """Build ledgers, summary and local outputs for one sample and scenario. Cache-only; no network.
+
+    ``strategy`` names a research variant (see research.py): its signals come from
+    research/<sample>/signals_<strategy>.csv and its outputs live one folder deeper."""
+    sub = Path(sample) / strategy / scenario if strategy else Path(sample) / scenario
+    bt = dataset / "backtest" / sub
+    rows = load_csv(dataset / "research" / sample / f"signals_{strategy}.csv" if strategy
+                    else dataset / "breakout_matches.csv")
     store = QuoteStore(CacheOnlySource(), dataset / "cache" / "backtest_quotes")  # type: ignore[arg-type]
-    signals, trades = build_ledgers(load_csv(dataset / "breakout_matches.csv"), load_csv(bt / "attempts.csv"),
-                                    load_csv(bt / "trades.csv"), store, sample, scenario)
-    out = dataset / "diagnostics" / sample / scenario  # per-signal/per-trade outputs: local, git-ignored
+    signals, trades = build_ledgers(rows, load_csv(bt / "attempts.csv"), load_csv(bt / "trades.csv"), store, sample,
+                                    scenario)
+    out = dataset / "diagnostics" / sub  # per-signal/per-trade outputs: local, git-ignored
+    label = f"{strategy}/{scenario}" if strategy else scenario
     write_csv(out / "signal_ledger.csv", signals)
     write_csv(out / "trade_ledger.csv", trades)
     (out / "failure_cases.md").write_text(render_cases(failure_cases(trades)), encoding="utf-8")
-    write_dashboard(out / "dashboard.html", signals, trades, sample, scenario)
-    return summarize(signals, trades, sample, scenario)
+    write_dashboard(out / "dashboard.html", signals, trades, sample, label)
+    return summarize(signals, trades, sample, label)
 
 
 # ---------- input validation and provenance ----------

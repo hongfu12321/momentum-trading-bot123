@@ -10,7 +10,7 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import backtest, diagnostics, quotes
+from . import backtest, diagnostics, quotes, research
 from .data.alpaca_assets import AlpacaPaperAssets
 from .data.alpaca_historical import AlpacaHistoricalProvider
 from .data.market_calendar import CalendarCoverageError
@@ -67,6 +67,9 @@ def build_parser() -> argparse.ArgumentParser:
     qp.add_argument("--sample", type=int, default=60, help="Candidates to sample, split evenly by session")
     qp.add_argument("--minutes", type=int, default=30, help="Quote window after each trigger bar")
     qp.add_argument("--seed", type=int, default=20261013, help="Sampling seed")
+    rs = sub.add_parser("m2-research", help="Top 5 (cached universe) variant vs the baseline, in-sample only (no orders).")
+    rs.add_argument("--dataset", required=True, help="Dataset folder built by m1-dataset, with references.csv.gz")
+    rs.add_argument("--skip-build", action="store_true", help="Reuse research/in_sample rankings and signal sets")
     bt = sub.add_parser("m2-backtest", help="Simulate the breakout strategy against historical SIP quotes (no orders).")
     bt.add_argument("--dataset", required=True, help="Dataset folder built by m1-dataset")
     bt.add_argument("--sample", choices=("in_sample", "out_of_sample"), default="in_sample")
@@ -91,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         return _dataset(args)
     if args.command == "m2-quote-probe":
         return _quote_probe(args)
+    if args.command == "m2-research":
+        return _research(args)
     if args.command == "m2-backtest":
         return _backtest(args)
     if args.command == "m2-diagnostics":
@@ -165,6 +170,49 @@ def _quote_probe(args: argparse.Namespace) -> int:
     print(f"quote windows: {status} ({provider.request_count} API requests, 0 orders)")
     print(f"summary: {path}")
     return EXIT_BLOCKED if "entitlement_blocked" in status else EXIT_OK  # type: ignore[operator]
+
+
+def _research(args: argparse.Namespace) -> int:
+    dataset = Path(args.dataset)
+    if not (dataset / "references.csv.gz").is_file():
+        print(f"error: {dataset / 'references.csv.gz'} not found; rerun m1-dataset (cache only) to write it",
+              file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        provider = AlpacaHistoricalProvider.from_env()
+    except AuthenticationError as exc:
+        print(f"error: {exc}. See .env.example.", file=sys.stderr)
+        return EXIT_USAGE
+    sample = research.IN_SAMPLE  # exploratory variants never touch the inspected hold-out
+    if not args.skip_build:
+        print(research.build(dataset, sample, log=print))
+    cache = dataset / "cache" / "backtest_quotes"
+    try:
+        results = research.run_backtests(dataset, backtest.QuoteStore(provider, cache),
+                                         backtest.QuoteStore(diagnostics.CacheOnlySource(), cache), sample)  # type: ignore[arg-type]
+    except (EntitlementError, AuthenticationError) as exc:
+        print(f"error: SIP quotes blocked: {exc}", file=sys.stderr)
+        return EXIT_BLOCKED
+    for k in research.STRATEGIES[1:]:
+        summary = {"dataset": str(dataset), "code_sha": code_version(), "orders_placed": 0, "network_requests": 0,
+                   "created_at_utc": datetime.now(timezone.utc).isoformat(),
+                   "provenance_variant": research.variant_provenance(dataset, sample, k),
+                   **diagnostics.run(dataset, sample, research.SCENARIO, k)}
+        stem = f"diagnostics_{sample}_{k}_{research.SCENARIO}"
+        (dataset / f"{stem}.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
+        (dataset / f"{stem}.md").write_text(diagnostics.render_report(summary), encoding="utf-8")
+    research.write_table(dataset / "research" / sample / "decisions.csv.gz", research.decisions(dataset, sample))
+    comparison = {"dataset": str(dataset), "code_sha": code_version(),
+                  "created_at_utc": datetime.now(timezone.utc).isoformat(),
+                  "quote_api_requests": provider.request_count, **research.compare(dataset, results, sample)}
+    stem = f"research_comparison_{sample}"
+    (dataset / f"{stem}.json").write_text(json.dumps(comparison, indent=2, default=str) + "\n", encoding="utf-8")
+    (dataset / f"{stem}.md").write_text(research.render_comparison(comparison), encoding="utf-8")
+    for k, v in comparison["strategies"].items():  # type: ignore[union-attr]
+        r = v["results"]["all"]
+        print(f"{k}: {r['trades']} trades, expectancy {r['expectancy_r']} R, net ${r['net_usd']:.2f}")
+    print(f"comparison: {dataset / (stem + '.md')} ({provider.request_count} quote API requests, 0 orders)")
+    return EXIT_OK
 
 
 def _backtest(args: argparse.Namespace) -> int:
