@@ -374,3 +374,150 @@ def _no_real_rclone(monkeypatch):  # noqa: ANN001, ANN202
             raise AssertionError(f"a test tried to run the real rclone: {cmd[:2]}")
         return real(cmd, *a, **k)
     monkeypatch.setattr(bk.subprocess, "run", guarded)
+
+
+# ---------- source consistency during upload ----------
+
+class ChangesSourceDuringUpload(bk.LocalTransport):
+    """Copies every file faithfully (so the remote md5 check passes), then changes the source dataset."""
+
+    def __init__(self, change) -> None:  # noqa: ANN001
+        self.change = change
+
+    def upload_files(self, src, rels, dst):  # noqa: ANN001, ANN201
+        super().upload_files(src, rels, dst)
+        self.change(src)
+
+
+@pytest.mark.parametrize(("change", "message"), [
+    (lambda ds: (ds / "report.md").write_bytes(b"# edited after it was copied\n"), "modified: report.md"),
+    (lambda ds: (ds / "cache" / "sip" / "2026-06-04_premarket_new.csv.gz").write_bytes(b"x"),
+     "unexpected: cache/sip/2026-06-04_premarket_new.csv.gz"),
+    (lambda ds: (ds / "inputs" / "nasdaqlisted.txt").unlink(), "missing: inputs/nasdaqlisted.txt"),
+])
+def test_dataset_changed_during_upload_never_completes(env, change, message) -> None:  # noqa: ANN001
+    ds, remote, t, tmp = env
+    with pytest.raises(bk.BackupError, match="dataset changed during the upload") as exc:
+        do_backup(ds, remote, ChangesSourceDuringUpload(change))
+    assert message in str(exc.value)
+    (snap,) = bk.list_snapshots(remote, t)
+    assert snap["complete"] is False  # never COMPLETE, never restorable
+    with pytest.raises(bk.BackupError, match="no COMPLETE.json"):
+        bk.restore(remote, snap["snapshot_id"], tmp / "dest", t, log=lambda _: None)
+
+
+# ---------- restore filesystem safety (adversarial) ----------
+
+class Planted(bk.LocalTransport):
+    """Downloads faithfully, then plants something in the staging folder (as a hostile remote or a racing
+    process could)."""
+
+    def __init__(self, plant) -> None:  # noqa: ANN001
+        self.plant = plant
+
+    def download_dir(self, src, dst):  # noqa: ANN001, ANN201
+        super().download_dir(src, dst)
+        self.plant(dst)
+
+
+def _outside_copy(tmp: Path, rel: str) -> Path:
+    """A file outside the staging root with exactly the expected bytes, so a link to it would pass a hash check."""
+    target = tmp / "outside" / rel.replace("/", "_")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(FILES[rel])
+    return target
+
+
+def _swap_for_link(path: Path, target: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+    path.symlink_to(target, target_is_directory=target.is_dir())
+
+
+@pytest.mark.parametrize("kind", ["file", "directory", "metadata"])
+def test_restore_rejects_symlinks_before_reading_anything(env, kind) -> None:  # noqa: ANN001
+    ds, remote, t, tmp = env
+    plan = do_backup(ds, remote, t)
+    if kind == "file":
+        target = _outside_copy(tmp, "report.md")
+        plant = lambda d: _swap_for_link(d / "dataset" / "report.md", target)  # noqa: E731
+    elif kind == "directory":
+        outside = tmp / "outside_inputs"
+        outside.mkdir()
+        (outside / "nasdaqlisted.txt").write_bytes(FILES["inputs/nasdaqlisted.txt"])
+        plant = lambda d: _swap_for_link(d / "dataset" / "inputs", outside)  # noqa: E731
+    else:
+        target = tmp / "outside_complete.json"
+        target.write_bytes(b"{}")
+        plant = lambda d: _swap_for_link(d / "COMPLETE.json", target)  # noqa: E731
+    dest = tmp / "dest"
+    with pytest.raises(bk.BackupError, match="symlink"):
+        bk.restore(remote, plan.snapshot_id, dest, Planted(plant), log=lambda _: None)
+    assert not dest.exists()
+    bk.restore(remote, plan.snapshot_id, dest, t, log=lambda _: None)  # an interrupted/rejected restore is retryable
+    assert bk.verify_dataset(dest) == [] and not any(p.is_symlink() for p in dest.rglob("*"))
+
+
+def test_stale_staging_symlink_is_never_followed_or_cleared(env) -> None:  # noqa: ANN001
+    ds, remote, t, tmp = env
+    plan = do_backup(ds, remote, t)
+    victim = tmp / "victim"
+    victim.mkdir()
+    (victim / "precious.txt").write_bytes(b"keep me")
+    staging = tmp / f".dest.restore-{plan.snapshot_id}.partial"
+    staging.symlink_to(victim, target_is_directory=True)  # substituted for our staging folder
+    with pytest.raises(bk.BackupError, match="is a symlink, not a staging folder"):
+        bk.restore(remote, plan.snapshot_id, tmp / "dest", t, log=lambda _: None)
+    assert (victim / "precious.txt").read_bytes() == b"keep me" and staging.is_symlink()
+
+
+def test_stale_staging_cleanup_does_not_follow_links_inside(env) -> None:  # noqa: ANN001
+    ds, remote, t, tmp = env
+    plan = do_backup(ds, remote, t)
+    victim = tmp / "victim"
+    victim.mkdir()
+    (victim / "precious.txt").write_bytes(b"keep me")
+    staging = tmp / f".dest.restore-{plan.snapshot_id}.partial"
+    (staging / "dataset").mkdir(parents=True)  # an interrupted restore, with a planted link inside it
+    (staging / "dataset" / "link").symlink_to(victim, target_is_directory=True)
+    (staging / "dataset" / "file_link").symlink_to(victim / "precious.txt")
+    bk.restore(remote, plan.snapshot_id, tmp / "dest", t, log=lambda _: None)
+    assert (victim / "precious.txt").read_bytes() == b"keep me"  # links removed, targets untouched
+    assert bk.verify_dataset(tmp / "dest") == []
+
+
+def test_verify_never_follows_symlinks_out_of_the_dataset(env) -> None:  # noqa: ANN001
+    ds, remote, t, tmp = env
+    plan = do_backup(ds, remote, t)
+    dest = tmp / "dest"
+    bk.restore(remote, plan.snapshot_id, dest, t, log=lambda _: None)
+    _swap_for_link(dest / "report.md", _outside_copy(tmp, "report.md"))  # identical bytes behind the link
+    outside = tmp / "outside_sip"
+    shutil.copytree(dest / "cache" / "sip", outside)
+    _swap_for_link(dest / "cache" / "sip", outside)  # a symlinked parent folder
+    assert bk.verify_dataset(dest) == ["symlink: cache/sip/2026-06-03_premarket_abc.csv.gz", "symlink: report.md"]
+    assert bk.regular_file(dest, "cache/sip/2026-06-03_premarket_abc.csv.gz") == (None, "symlink")
+
+
+def test_verify_intentionally_ignores_excluded_files(env) -> None:  # noqa: ANN001
+    """Excluded names are never in a snapshot, so they are not reported (documented behaviour)."""
+    ds, remote, t, tmp = env
+    plan = do_backup(ds, remote, t)
+    dest = tmp / "dest"
+    bk.restore(remote, plan.snapshot_id, dest, t, log=lambda _: None)
+    for rel, data in {".env": b"K=V", "notes.txt": b"x", "run.log": b"x", "viewer_check.json": b"{}"}.items():
+        (dest / rel).write_bytes(data)
+    assert bk.verify_dataset(dest) == []
+    (dest / "extra.csv").write_bytes(b"x")  # an allowlisted name that is not in the snapshot is reported
+    assert bk.verify_dataset(dest) == ["unexpected: extra.csv"]
+
+
+def test_backup_never_reads_through_a_symlinked_source_file(env) -> None:  # noqa: ANN001
+    ds, *_ = env
+    outside = ds.parent / "outside.csv"
+    outside.write_bytes(b"secret,data\n")
+    (ds / "linked.csv").symlink_to(outside)
+    inv = bk.inventory(ds)
+    assert "linked.csv" not in inv.files and inv.excluded["symlink_or_special"] == 1

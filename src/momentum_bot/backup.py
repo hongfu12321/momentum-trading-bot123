@@ -25,6 +25,7 @@ import json
 import os
 import secrets
 import shutil
+import stat
 import subprocess
 import tempfile
 from collections import Counter
@@ -74,8 +75,9 @@ class Inventory:
 
 
 def _digests(path: Path) -> tuple[int, str, str]:
+    """Size, sha256 and md5 of a regular file, opened without following a symlink in its last component."""
     sha, md5, size = hashlib.sha256(), hashlib.md5(usedforsecurity=False), 0
-    with path.open("rb") as fh:
+    with os.fdopen(os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)), "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             sha.update(chunk)
             md5.update(chunk)
@@ -124,13 +126,50 @@ def inventory(dataset: Path) -> Inventory:
     return Inventory(dict(sorted(files.items())), dict(sorted(excluded.items())))
 
 
+def regular_file(root: Path, rel: str) -> tuple[Path | None, str | None]:
+    """Resolve a recorded relative path inside root without following any symlink: every parent folder must be
+    a real directory and the file a regular file. Returns (path, None), or (None, "missing" | "symlink" | ...)."""
+    cur = root
+    parts = safe_parts(rel)
+    for i, part in enumerate(parts):
+        cur = cur / part
+        try:
+            st = os.lstat(cur)
+        except FileNotFoundError:
+            return None, "missing"
+        if stat.S_ISLNK(st.st_mode):
+            return None, "symlink"
+        if i < len(parts) - 1 and not stat.S_ISDIR(st.st_mode):
+            return None, "missing"
+        if i == len(parts) - 1 and not stat.S_ISREG(st.st_mode):
+            return None, "not a regular file"
+    return cur, None
+
+
+def symlinks_under(root: Path) -> list[str]:
+    """Every symlink at or below root (files and folders), without following any of them."""
+    if root.is_symlink():
+        return ["."]
+    out = []
+    for dirpath, dirs, names in os.walk(root, followlinks=False):
+        for name in [*dirs, *names]:
+            if os.path.islink(os.path.join(dirpath, name)):
+                out.append(Path(dirpath, name).relative_to(root).as_posix())
+    return sorted(out)
+
+
 def check_inventory(dataset: Path, files: dict[str, dict[str, object]], *, extra_ok: Iterable[str] = ()) -> list[str]:
-    """Problems of a dataset folder against recorded checksums: missing, modified and unexpected files."""
+    """Problems of a dataset folder against recorded checksums: missing, modified, symlinked and unexpected files.
+
+    Only allowlisted names are compared (``classify``). Excluded files (hidden ones such as ``.env`` or
+    ``.snapshot/``, secret-like names, temporary files and logs, the regenerated ``viewer_check.json``, and
+    anything not on the allowlist) are never part of a snapshot, so they are intentionally ignored here, not
+    reported as unexpected. Restore is stricter: its payload must hold exactly the recorded files."""
     problems: list[str] = []
     for rel, want in files.items():
-        path = dataset.joinpath(*safe_parts(rel))
-        if not path.is_file():
-            problems.append(f"missing: {rel}")
+        path, why = regular_file(dataset, rel)
+        if path is None:
+            problems.append(f"{why}: {rel}" if why != "missing" else f"missing: {rel}")
             continue
         size, sha, _ = _digests(path)
         if size != want["size"] or sha != want["sha256"]:
@@ -347,6 +386,13 @@ def backup(plan: BackupPlan, transport: Transport, log: Callable[[str], None] = 
     rels = list(plan.inventory.files)
     log(f"uploading {len(rels)} files ({plan.inventory.total_bytes:,} bytes) to {plan.remote_dir}")
     transport.upload_files(plan.dataset, rels, join(plan.remote_dir, PAYLOAD))
+    # The remote md5 check below catches a file that changed before it was copied. A file changed, added or
+    # removed after it was copied would leave a self-consistent snapshot that no longer matches the dataset:
+    # re-check the whole source before anything can be marked complete.
+    moved = check_inventory(plan.dataset, plan.inventory.files)
+    if moved:
+        raise BackupError(f"dataset changed during the upload; snapshot {plan.snapshot_id} is left INCOMPLETE "
+                          "(back up again once nothing is writing to it): " + "; ".join(moved[:5]))
     with tempfile.TemporaryDirectory() as tmp:
         meta = {CHECKSUMS: _json_bytes(plan.inventory.files), MANIFEST: _json_bytes(plan.manifest)}
         for name, data in meta.items():
@@ -418,8 +464,10 @@ def find_snapshot(remote: str, snapshot_id: str, transport: Transport) -> str:
 def verify_snapshot_dir(staged: Path) -> tuple[dict[str, object], dict[str, dict[str, object]], list[str]]:
     """Check a downloaded snapshot: the metadata chain (COMPLETE -> manifest -> checksums) and every file."""
     problems: list[str] = []
+    if symlinks_under(staged):
+        raise BackupError("snapshot contains symlinks; refusing to read it")
     for name in (COMPLETE, MANIFEST, CHECKSUMS):
-        if not (staged / name).is_file():
+        if (staged / name).is_symlink() or not (staged / name).is_file():
             raise BackupError(f"snapshot is missing {name}" + ("; it never completed (failed or interrupted backup)"
                                                                if name == COMPLETE else ""))
     complete = json.loads((staged / COMPLETE).read_text(encoding="utf-8"))
@@ -440,7 +488,8 @@ def verify_snapshot_dir(staged: Path) -> tuple[dict[str, object], dict[str, dict
         payload = staged / PAYLOAD
         problems += check_inventory(payload, files) if payload.is_dir() else ["the snapshot has no dataset/ folder"]
         if payload.is_dir():  # check_inventory ignores non-allowlisted names; the payload must hold nothing else
-            listed = {p.relative_to(payload).as_posix() for p in payload.rglob("*") if p.is_file()}
+            listed = {Path(d, n).relative_to(payload).as_posix() for d, _, ns in os.walk(payload, followlinks=False)
+                      for n in ns}
             problems += [f"unexpected: {r}" for r in sorted(listed - files.keys()) if f"unexpected: {r}" not in problems]
     return manifest, files, sorted(problems)
 
@@ -453,14 +502,25 @@ def restore(remote: str, snapshot_id: str, destination: Path, transport: Transpo
     src = find_snapshot(remote, snapshot_id, transport)
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = destination.parent / f".{destination.name}.restore-{snapshot_id}.partial"
+    if staging.is_symlink():  # never follow or clear something that only looks like our staging folder
+        raise BackupError(f"{staging} is a symlink, not a staging folder of this tool; remove it yourself")
     if staging.exists():  # left by an interrupted restore of this same snapshot: ours to clear
-        shutil.rmtree(staging)
+        if not staging.is_dir():
+            raise BackupError(f"{staging} exists and is not a folder; remove it yourself")
+        if not shutil.rmtree.avoids_symlink_attacks:  # pragma: no cover - platform dependent
+            raise BackupError(f"stale staging {staging} exists; remove it yourself (this platform's rmtree is not "
+                              "symlink-safe)")
+        shutil.rmtree(staging)  # symlink-safe: links inside are removed, never followed
     remote_files = transport.list_files(src)
     if COMPLETE not in remote_files:
         raise BackupError(f"snapshot {snapshot_id} has no COMPLETE.json: it is a failed or interrupted backup and "
                           "is never restored")
     log(f"downloading {src} to {staging}")
     transport.download_dir(src, staging)
+    links = symlinks_under(staging)
+    if links:  # rejected before any file is read, so validation never leaves the staging folder
+        raise BackupError(f"restore rejected: the download contains symlinks ({', '.join(links[:5])}); nothing was "
+                          f"moved into {destination} (staging kept at {staging})")
     manifest, files, problems = verify_snapshot_dir(staging)
     if problems:
         raise BackupError(f"restore rejected, {len(problems)} problem(s); nothing was moved into {destination} "

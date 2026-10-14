@@ -14,6 +14,8 @@ gdrive:trading-research/snapshots/<dataset name>/<snapshot id>/
 - **Copy-only:** the tool runs only `rclone copy`, `copyto`, `lsf` and `lsjson`. It refuses `sync`, `move`, `delete`, `purge` and similar commands, and it never deletes anything remotely.
 - **Never presented as complete unless verified:** after upload, every file's size and Google's server-computed MD5 are compared with the local inventory. Only then is `COMPLETE.json` written. A failed or interrupted backup stays `INCOMPLETE` in `dataset-list` and can never be restored.
 - **Verified restore:** the snapshot downloads into a hidden staging folder next to the destination. The tool checks the metadata chain (`COMPLETE.json` → manifest → checksums), every file's size and SHA-256, and that nothing is missing or extra. Only then is the folder renamed into place. An existing destination is never overwritten.
+- **Consistent source:** the dataset is checked against its inventory twice, just before the upload and again after it, before `COMPLETE.json` can be written. A file edited, added or removed while the backup runs leaves the snapshot `INCOMPLETE`. A file changed before it was copied is also caught by the remote MD5 check.
+- **No symlinks:** backup never reads through a symlink; symlinked files and folders are excluded. Restore rejects a download that contains any symlink (file, folder or metadata) before reading a single file. Recorded paths are resolved component by component without following links, and files are opened with `O_NOFOLLOW`, so validation never leaves the staging folder. A leftover staging path that is a symlink is refused, never followed or cleared. A real leftover staging folder is removed with Python's symlink-safe `rmtree`: links inside it are deleted, and their targets are left alone.
 - **Exact bytes:** files are copied as is (`sha256-raw-bytes-v1`, no line-ending changes) and nothing is regenerated or fetched from Alpaca.
 
 ## What is included
@@ -142,7 +144,8 @@ The destination must not exist yet. The restored folder also holds `.snapshot/` 
 .venv/bin/momentum-bot m2-viewer-check --dataset reports/datasets/m2_sip_20260603_20261009
 ```
 
-- `dataset-verify` is offline. It reports every missing, modified or unexpected file. Exit code 0 means everything matches; 4 means differences were found.
+- `dataset-verify` is offline. It reports every missing, modified, symlinked or unexpected file. Exit code 0 means everything matches; 4 means differences were found.
+- **Excluded files are intentionally ignored.** `dataset-verify` compares only allowlisted names, because excluded files are never part of a snapshot. A local `.env`, other hidden files and the `.snapshot/` folder, secret-like names, temporary files and logs, `viewer_check.json`, or a file with a name not on the allowlist (for example `notes.txt`) are not reported. An allowlisted name that is not in the snapshot (for example a new `extra.csv` or `cache/sip/*.csv.gz` file) is reported as unexpected. Restore is stricter: the downloaded payload must contain exactly the recorded files and nothing else.
 - To check a dataset that was never restored, against a snapshot's checksums, pass `--checksums path/to/checksums.json`.
 - `m2-viewer-check` then reconciles the backtest results and chart markers, also offline.
 
