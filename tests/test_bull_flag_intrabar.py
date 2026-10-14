@@ -253,3 +253,24 @@ def test_frozen_baseline_configuration_is_untouched() -> None:
     assert (BASE.latency, BASE.spread_cap_bps, BASE.entry_timeout) == (timedelta(milliseconds=500), 50.0,
                                                                         timedelta(seconds=10))
     assert RiskConfig() == RiskConfig(3_000.0, 15.0, 0.25, 45.0, 5, 3)
+
+
+def test_fetch_missing_downloads_only_uncovered_triggered_setups_into_a_separate_cache(tmp_path) -> None:  # noqa: ANN001
+    bars = pattern() + [ob(f"04:{m:02d}", 2.15, 2.17, 2.14, 2.16, 20_000) for m in range(9, 40)]
+    sets = bi.detect_setups("FLG", bars, PM)
+    quiet = replace(sets[0], setup_id="never-triggers", level=99.0)
+
+    class Source:
+        request_count = 0
+
+        def iter_quotes(self, symbol, feed, start, end):  # noqa: ANN001, ANN201
+            self.request_count += 1
+            return [{"t": (start + timedelta(seconds=1)).isoformat(), "bp": 2.12, "ap": 2.13, "bs": 100, "as": 100}]
+
+    src, cache = Source(), tmp_path / "research_quotes"
+    index = bi.QuoteIndex(tmp_path / "dataset_cache")  # empty dataset cache, never written to
+    out = bi.fetch_missing([sets[0], quiet], {("FLG", str(DAY), "premarket"): bars}, index, cache, src)
+    assert out == {"windows_fetched": 1, "windows_failed": 0} and src.request_count == 1
+    assert not (tmp_path / "dataset_cache").exists() and len(list(cache.glob("*.jsonl.gz"))) == 1
+    again = bi.fetch_missing([sets[0]], {("FLG", str(DAY), "premarket"): bars}, bi.QuoteIndex(cache), cache, src)
+    assert again["windows_fetched"] == 0 and src.request_count == 1  # covered now: no second request

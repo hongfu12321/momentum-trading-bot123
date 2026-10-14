@@ -48,7 +48,7 @@ from .backtest import (
 from .bullflag import FlagParams, session_volumes
 from .data.market_calendar import EXTENDED_SESSIONS, SessionWindow, session_windows
 from .data.normalize import BAR_LENGTH
-from .data.provider import Bar
+from .data.provider import AuthenticationError, Bar, EntitlementError, ProviderError
 from .quotes import EXECUTABLE, MAX_QUOTE_AGE_S, clean_quotes
 
 _UTC = timezone.utc
@@ -149,11 +149,12 @@ def detect_setups(symbol: str, bars: list[Bar], window: SessionWindow, p: Intrab
 # ---------- quote cache (read only) ----------
 
 class QuoteIndex:
-    """Which time ranges of which symbols the local quote cache holds. Never fetches, never writes."""
+    """Which time ranges of which symbols the local quote caches hold. Never fetches, never writes."""
 
-    def __init__(self, cache_dir: Path) -> None:
+    def __init__(self, *cache_dirs: Path) -> None:
         self.files: dict[str, list[tuple[datetime, datetime, Path]]] = defaultdict(list)
-        for f in sorted(cache_dir.glob("*.jsonl.gz")) if cache_dir.is_dir() else []:
+        found = [f for d in cache_dirs if d.is_dir() for f in d.glob("*.jsonl.gz")]
+        for f in sorted(found):
             try:
                 sym, start, end = f.name[: -len(".jsonl.gz")].rsplit("_", 2)
                 a = datetime.strptime(start, "%Y%m%dT%H%M%S").replace(tzinfo=_UTC)
@@ -509,9 +510,42 @@ def _inputs(dataset: Path, days: set[str]) -> list[Path]:
             *sorted(sip), *sorted((dataset / "cache" / "backtest_quotes").glob("*.jsonl.gz"))]
 
 
-def run_research(dataset: Path, out_dir: Path, sample: str = "in_sample", log=print) -> dict[str, object]:  # noqa: ANN001
+def fetch_missing(setups: Iterable[Setup], bars_by: Mapping[tuple[str, str, str], list[Bar]], index: QuoteIndex,
+                  cache: Path, source: object, p: IntrabarParams = IntrabarParams()) -> dict[str, int]:
+    """Download SIP quotes for setups that broke out on 1-minute bars but lack quote coverage, into
+    ``cache`` (a research cache outside the dataset). A setup whose bars never exceed the reference
+    High cannot trigger on quotes either, so it needs none."""
+    cache.mkdir(parents=True, exist_ok=True)
+    done = failed = 0
+    for st in setups:
+        close = session_windows(date.fromisoformat(st.trading_date))[st.session].end_utc
+        a, b = _quote_window(st, close, p)
+        if index.covers(st.symbol, a, b) or first_trigger(st, bars_by[(st.symbol, st.trading_date, st.session)],
+                                                          None)[0] is None:
+            continue
+        path = cache / f"{st.symbol}_{a:%Y%m%dT%H%M%S}_{b:%H%M%S}.jsonl.gz"
+        try:
+            rows = list(source.iter_quotes(st.symbol, "sip", a, b))  # type: ignore[attr-defined]
+        except (EntitlementError, AuthenticationError):
+            raise  # never silently replace SIP: stop the run
+        except ProviderError:  # recorded, never filled in; the setup stays OHLC-approximated
+            failed += 1
+            continue
+        tmp = path.with_suffix(".tmp")
+        with gzip.open(tmp, "wt", encoding="utf-8") as fh:
+            fh.writelines(json.dumps(r, sort_keys=True) + "\n" for r in rows)
+        tmp.replace(path)
+        index.files[st.symbol].append((a, b, path))
+        done += 1
+    return {"windows_fetched": done, "windows_failed": failed}
+
+
+def run_research(dataset: Path, out_dir: Path, sample: str = "in_sample", log=print,  # noqa: ANN001
+                 quote_cache: Path | None = None, source: object | None = None) -> dict[str, object]:
     """Detect setups on every in-sample session and backtest both variants under the base and the
-    predeclared stress assumptions. Reads the dataset and quote cache; writes only to ``out_dir``."""
+    predeclared stress assumptions. Reads the dataset and its quote cache, never writing to either.
+    ``quote_cache`` is an extra, research-only quote cache outside the dataset; with ``source`` the
+    missing setup windows are downloaded into it first."""
     from . import research
 
     if sample != research.IN_SAMPLE:
@@ -522,7 +556,7 @@ def run_research(dataset: Path, out_dir: Path, sample: str = "in_sample", log=pr
     as_of = datetime.fromisoformat(manifest["as_of_utc"])
     scan = research.ScanParams(**manifest["scan_params"])
     refs = research.load_references(dataset)
-    index = QuoteIndex(dataset / "cache" / "backtest_quotes")
+    index = QuoteIndex(dataset / "cache" / "backtest_quotes", *([quote_cache] if quote_cache else []))
     p = IntrabarParams()
     setups: list[Setup] = []
     bars_by: dict[tuple[str, str, str], list[Bar]] = {}
@@ -546,6 +580,9 @@ def run_research(dataset: Path, out_dir: Path, sample: str = "in_sample", log=pr
                     bars_by[(sym, d, session)] = bars[sym]
                     setups += found
         log(f"{d}: {len(setups)} setups")
+    fetched = (fetch_missing(setups, bars_by, index, quote_cache, source, p)
+               if source is not None and quote_cache is not None else {"windows_fetched": 0, "windows_failed": 0})
+    log(f"quotes: {fetched}")
     cover = {st.setup_id: index.covers(st.symbol, *_quote_window(
         st, session_windows(date.fromisoformat(st.trading_date))[st.session].end_utc, p)) for st in setups}
     variants = {"bf_intrabar": setups, "top5_bf_intrabar": [x for x in setups if x.top5_rank is not None]}
@@ -565,7 +602,8 @@ def run_research(dataset: Path, out_dir: Path, sample: str = "in_sample", log=pr
          "stop": x.stop, "top5_rank": x.top5_rank, "nbbo_covered": cover[x.setup_id], **x.detail} for x in setups])
     after = sha256_files(_inputs(dataset, set(days)))
     return {"sample": sample, "days": len(days), "sessions_missing_bars": missing, "orders_placed": 0,
-            "network_requests": 0, "trade_prints_cached": False,
+            "network_requests": getattr(source, "request_count", 0), "research_quote_cache": fetched,
+            "trade_prints_cached": False,
             "params": {k: (str(v) if isinstance(v, timedelta) else v) for k, v in asdict(p).items()},
             "stress": {"nbbo": "latency 2 s, 50% of displayed size, 10 bps adverse",
                        "ohlc_cost_bps_per_side": STRESS_OHLC_COST_BPS},

@@ -80,6 +80,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Per-setup and per-trade outputs (local, git-ignored); never inside the dataset")
     bi.add_argument("--summary", default="reports/research_program/bull_flag_intrabar_summary.json",
                     help="Aggregate, symbol-free summary (committed)")
+    bi.add_argument("--quote-cache", default="research_out/bull_flag_intrabar/quote_cache",
+                    help="Research-only SIP quote cache outside the dataset (local, git-ignored)")
+    bi.add_argument("--fetch-missing-quotes", action="store_true",
+                    help="Download SIP quotes for triggered setups not covered by any cache (network; default: off)")
     bt = sub.add_parser("m2-backtest", help="Simulate the breakout strategy against historical SIP quotes (no orders).")
     bt.add_argument("--dataset", required=True, help="Dataset folder built by m1-dataset")
     bt.add_argument("--sample", choices=("in_sample", "out_of_sample"), default="in_sample")
@@ -272,16 +276,23 @@ def _research(args: argparse.Namespace) -> int:
 def _bullflag_intrabar(args: argparse.Namespace) -> int:
     from . import bullflag_intrabar
 
-    dataset, out = Path(args.dataset).resolve(), Path(args.out_dir).resolve()
-    if dataset == out or dataset in out.parents:
-        print("error: --out-dir must be outside the dataset folder (the dataset is read-only)", file=sys.stderr)
+    dataset, out, qc = Path(args.dataset).resolve(), Path(args.out_dir).resolve(), Path(args.quote_cache).resolve()
+    if any(dataset == x or dataset in x.parents for x in (out, qc)):
+        print("error: --out-dir and --quote-cache must be outside the dataset folder (it is read-only)", file=sys.stderr)
         return EXIT_USAGE
+    source = None
+    if args.fetch_missing_quotes:
+        try:
+            source = AlpacaHistoricalProvider.from_env()
+        except AuthenticationError as exc:
+            print(f"error: {exc}. See .env.example.", file=sys.stderr)
+            return EXIT_USAGE
     if not (dataset / "references.csv.gz").is_file():
         print(f"error: {dataset / 'references.csv.gz'} not found", file=sys.stderr)
         return EXIT_USAGE
     result = {"dataset": Path(args.dataset).as_posix(), "code_sha": code_version(),
               "created_at_utc": datetime.now(timezone.utc).isoformat(),
-              **bullflag_intrabar.run_research(dataset, out)}
+              **bullflag_intrabar.run_research(dataset, out, quote_cache=qc, source=source)}
     path = Path(args.summary)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8", newline="\n")
@@ -289,7 +300,8 @@ def _bullflag_intrabar(args: argparse.Namespace) -> int:
         b = v["base"]
         print(f"{k}: {b['setups_detected']} setups, {b['entries']} entries, {b['completed_trades']} completed, "
               f"net ${b['net_usd']:.2f}, NBBO-covered setups {v['quote_coverage']['nbbo_covered']}")
-    print(f"summary: {path} (inputs unchanged: {result['inputs_unchanged']}; 0 network requests, 0 orders)")
+    print(f"summary: {path} (inputs unchanged: {result['inputs_unchanged']}; "
+          f"{result['network_requests']} quote API requests, 0 orders)")
     return EXIT_OK if result["inputs_unchanged"] else EXIT_MISMATCH
 
 
