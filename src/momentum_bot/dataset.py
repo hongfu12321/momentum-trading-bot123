@@ -316,6 +316,10 @@ def build_dataset(
                         if split:
                             raw_refs[sym] = close
                 eligible = sorted(refs)
+                # Point-in-time reference per eligible symbol (local only): reused by Top 5 rankings.
+                tables["references"] += [{"symbol": s, "trading_date": d.isoformat(), "session": session,
+                                          "reference_close": refs[s], "split_adjusted": s in raw_refs}
+                                         for s in eligible]
                 origin_counts = Counter(universe.origin[s].split(":")[0] for s in eligible)
                 tables["eligibility"].append({
                     "trading_date": d.isoformat(), "session": session, "sample": sample,

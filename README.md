@@ -110,9 +110,18 @@ momentum-bot m2-diagnostics --dataset reports/datasets/m2_sip_20260603_20261009 
 
 Replays only the cached backtest quotes and makes no network requests. It writes reason-coded signal and trade ledgers, MFE/MAE, post-entry moves, slippage and spread cost, and bucketed breakdowns with small-sample flags. Entry-time features are kept separate from post-entry diagnostics. The aggregate report and JSON are committable. Ledgers, failure cases and the standalone `dashboard.html` stay local. Out-of-sample needs `--confirm-out-of-sample` and is for reporting only. Data dictionary: `docs/m2_diagnostics.md`. Findings: `reports/m2_diagnostics.md`.
 
+## Historical replay viewer (localhost)
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[viewer]"
+.\.venv\Scripts\momentum-bot.exe m2-viewer
+```
+
+`m2-viewer` serves a Streamlit app on 127.0.0.1:8501 that replays the baseline backtest day by day from local files: scanner signals and their outcomes, annotated 1-minute candlestick charts, trades and a daily summary. It shows a clear **Historical Replay — Not Live** banner, the dataset's date range, and one shared date / session / stock selection, defaulting to the latest historical date. All times are US Eastern. `m2-chart --date YYYY-MM-DD --session premarket` exports a session's charts to standalone HTML. Exploratory Top 5 (cached sub-$20 universe, not market-wide) and Bull Flag research layers come from `m2-research`, are in-sample only, and stay off unless switched on. Details: `docs/m2_research_viewer.md`. Research results: `reports/m2_top5_bullflag.md`.
+
 ## Licensed data stays local
 
-Raw bars, quotes, per-symbol tables and input snapshots are Alpaca or third-party data and are git-ignored. Only aggregate outputs are committed: `report.md`, `manifest.json` (including the sha256 of every input snapshot), count-only `eligibility.csv`, `quote_probe_summary.json`, `backtest_summary_*.json` and `diagnostics_*.{json,md}`.
+Raw bars, quotes, per-symbol tables and input snapshots are Alpaca or third-party data and are git-ignored. Only aggregate outputs are committed: `report.md`, `manifest.json` (including the sha256 of every input snapshot), count-only `eligibility.csv`, `quote_probe_summary.json`, `backtest_summary_*.json`, `diagnostics_*.{json,md}` and `research_comparison_*.{json,md}`. The viewer, exported charts and research tables stay local.
 
 ## Safety
 

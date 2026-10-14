@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .dataset import DatasetResult
 
-LARGE_TABLES = frozenset({"candidates", "universe", "coverage_buckets", "fetch_log"})
+LARGE_TABLES = frozenset({"candidates", "universe", "coverage_buckets", "fetch_log", "references"})
 
 
 def _write(path: Path, rows: list[dict[str, object]]) -> None:
@@ -107,7 +107,7 @@ def render(result: DatasetResult) -> str:
     L += ["## Files", "",
           "`manifest.json`, `eligibility.csv`, `coverage_buckets.csv.gz` (30-min ET buckets), `candidate_detail.csv`, "
           "`candidate_matches.csv`, `breakout_matches.csv`, `candidates.csv.gz`, `split_checks.csv`, "
-          "`split_candidate_changes.csv`, `universe.csv.gz`, `fetch_log.csv.gz`, `inputs/` (directory and "
+          "`split_candidate_changes.csv`, `universe.csv.gz`, `fetch_log.csv.gz`, `references.csv.gz` (reference close per eligible symbol and session), `inputs/` (directory and "
           "corporate-action snapshots), `cache/` (raw bars; reruns reuse it).", ""]
     return "\n".join(L)
 

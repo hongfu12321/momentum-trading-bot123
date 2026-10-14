@@ -10,7 +10,7 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import backtest, diagnostics, quotes
+from . import backtest, diagnostics, quotes, research
 from .data.alpaca_assets import AlpacaPaperAssets
 from .data.alpaca_historical import AlpacaHistoricalProvider
 from .data.market_calendar import CalendarCoverageError
@@ -81,6 +81,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Required for out_of_sample: report only, never use it to choose filters or parameters")
     bt.add_argument("--confirm-out-of-sample", action="store_true",
                     help="Required for --sample out_of_sample: the hold-out should be evaluated once, with frozen configs")
+    rs = sub.add_parser("m2-research", help="Top 5 and Bull Flag variants vs the baseline, in-sample only (no orders).")
+    rs.add_argument("--dataset", required=True, help="Dataset folder built by m1-dataset, with references.csv.gz")
+    rs.add_argument("--skip-build", action="store_true", help="Reuse research/in_sample rankings and signal sets")
+    ch = sub.add_parser("m2-chart", help="Export one session's annotated Top 5 charts to a standalone local HTML file.")
+    ch.add_argument("--dataset", required=True, help="Dataset folder with m2-diagnostics outputs")
+    ch.add_argument("--date", required=True, help="Trading date, YYYY-MM-DD")
+    ch.add_argument("--session", choices=("premarket", "afterhours"), default="premarket")
+    ch.add_argument("--strategy", choices=research.STRATEGIES, default="hos",
+                    help="hos = the baseline (default); variants are exploratory, in-sample only")
+    vw = sub.add_parser("m2-viewer", help="Launch the localhost research viewer (Streamlit, 127.0.0.1 only).")
+    vw.add_argument("--dataset", default="reports/datasets/m2_sip_20260603_20261009", help="Dataset folder")
+    vw.add_argument("--port", type=int, default=8501)
     return parser
 
 
@@ -95,6 +107,12 @@ def main(argv: list[str] | None = None) -> int:
         return _backtest(args)
     if args.command == "m2-diagnostics":
         return _diagnostics(args)
+    if args.command == "m2-research":
+        return _research(args)
+    if args.command == "m2-chart":
+        return _chart(args)
+    if args.command == "m2-viewer":
+        return _viewer(args)
     symbols = _symbols(args)
     if not symbols:
         print("error: provide --symbols or --symbols-file", file=sys.stderr)
@@ -237,6 +255,70 @@ def _diagnostics(args: argparse.Namespace) -> int:
     print(f"{summary['trades']} trades diagnosed; aggregate report: {dataset / (stem + '.md')}")
     print(f"local ledgers and dashboard: {dataset / 'diagnostics' / args.sample / args.scenario}")
     return EXIT_OK
+
+
+def _research(args: argparse.Namespace) -> int:
+    dataset = Path(args.dataset)
+    if not (dataset / "references.csv.gz").is_file():
+        print(f"error: {dataset / 'references.csv.gz'} not found; rerun m1-dataset (cache only) to write it",
+              file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        provider = AlpacaHistoricalProvider.from_env()
+    except AuthenticationError as exc:
+        print(f"error: {exc}. See .env.example.", file=sys.stderr)
+        return EXIT_USAGE
+    sample = research.IN_SAMPLE  # exploratory variants never touch the inspected hold-out
+    if not args.skip_build:
+        print(research.build(dataset, sample, log=print))
+    cache = dataset / "cache" / "backtest_quotes"
+    try:
+        results = research.run_backtests(dataset, backtest.QuoteStore(provider, cache),
+                                         backtest.QuoteStore(diagnostics.CacheOnlySource(), cache), sample)  # type: ignore[arg-type]
+    except (EntitlementError, AuthenticationError) as exc:
+        print(f"error: SIP quotes blocked: {exc}", file=sys.stderr)
+        return EXIT_BLOCKED
+    for k in research.STRATEGIES[1:]:
+        summary = {"dataset": str(dataset), "code_sha": code_version(), "orders_placed": 0, "network_requests": 0,
+                   "created_at_utc": datetime.now(timezone.utc).isoformat(),
+                   "provenance_variant": research.variant_provenance(dataset, sample, k),
+                   **diagnostics.run(dataset, sample, research.SCENARIO, k)}
+        stem = f"diagnostics_{sample}_{k}_{research.SCENARIO}"
+        (dataset / f"{stem}.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
+        (dataset / f"{stem}.md").write_text(diagnostics.render_report(summary), encoding="utf-8")
+    research.write_table(dataset / "research" / sample / "decisions.csv.gz", research.decisions(dataset, sample))
+    comparison = {"dataset": str(dataset), "code_sha": code_version(),
+                  "created_at_utc": datetime.now(timezone.utc).isoformat(),
+                  "quote_api_requests": provider.request_count, **research.compare(dataset, results, sample)}
+    stem = f"research_comparison_{sample}"
+    (dataset / f"{stem}.json").write_text(json.dumps(comparison, indent=2, default=str) + "\n", encoding="utf-8")
+    (dataset / f"{stem}.md").write_text(research.render_comparison(comparison), encoding="utf-8")
+    for k, v in comparison["strategies"].items():  # type: ignore[union-attr]
+        r = v["results"]["all"]
+        print(f"{k}: {r['trades']} trades, expectancy {r['expectancy_r']} R, net ${r['net_usd']:.2f}")
+    print(f"comparison: {dataset / (stem + '.md')} ({provider.request_count} quote API requests, 0 orders)")
+    return EXIT_OK
+
+
+def _chart(args: argparse.Namespace) -> int:
+    from . import charts  # plotly is an optional dependency: pip install -e ".[viewer]"
+
+    try:
+        path = charts.export_session(Path(args.dataset), args.date, args.session, args.strategy)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    print(f"charts: {path} (local only: contains licensed market data; do not commit or publish)")
+    return EXIT_OK
+
+
+def _viewer(args: argparse.Namespace) -> int:
+    import subprocess
+
+    app = Path(__file__).with_name("viewer.py")
+    cmd = [sys.executable, "-m", "streamlit", "run", str(app), "--server.address", "127.0.0.1",
+           "--server.port", str(args.port), "--browser.gatherUsageStats", "false", "--", "--dataset", args.dataset]
+    return subprocess.call(cmd)
 
 
 if __name__ == "__main__":
