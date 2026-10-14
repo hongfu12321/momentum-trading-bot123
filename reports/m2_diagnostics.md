@@ -1,6 +1,6 @@
 # M2 trade diagnostics: why the breakout strategy loses
 
-**Scope:** the frozen base-case configuration (`base_cap50`) from `reports/m2_backtest.md`, rerun with the corrected execution model (`1b76f5c`: incomplete exits reported apart from realized P&L, displayed NBBO size never re-used). The strategy is `candle_close_confirmation`. The strategy, risk settings and the 50 bps cap are unchanged. The diagnostics replay only the SIP quotes the backtest cached: 0 network requests and 0 orders. All 925 evaluated in-sample signals, all 442 evaluated out-of-sample signals and all 353 entries had cached quotes, so no field was estimated. R-based figures use completed trades only (236 in-sample, 116 out-of-sample); the one out-of-sample incomplete exit (no shares sold within its 2-minute exit window, 45 shares marked at $0.00) is counted as an entry but never scored.
+**Scope:** the frozen base-case configuration (`base_cap50`) from `reports/m2_backtest.md`, rerun with the corrected execution model (PR #4, merged to main as `87195b7`: incomplete exits reported apart from realized P&L, displayed NBBO size never re-used). The strategy is `candle_close_confirmation`. The strategy, risk settings and the 50 bps cap are unchanged. The diagnostics replay only the SIP quotes the backtest cached: 0 network requests and 0 orders. All 925 evaluated in-sample signals, all 442 evaluated out-of-sample signals and all 353 entries had cached quotes, so no field was estimated. R-based figures use completed trades only (236 in-sample, 116 out-of-sample); the one out-of-sample incomplete exit (no shares sold within its 2-minute exit window, 45 shares marked at $0.00) is counted as an entry but never scored.
 **Generated aggregates:** `reports/datasets/m2_sip_20260603_20261009/diagnostics_{in_sample,out_of_sample}_base_cap50.{md,json}`. Field definitions: `docs/m2_diagnostics.md`. Per-trade ledgers, failure-case lists and the interactive dashboard stay local (git-ignored).
 **Integrity:** every hypothesis below comes from in-sample data. Out-of-sample figures are shown only to check whether a *descriptive* observation repeats. No filter or parameter was chosen from them. Every hypothesis needs pre-registration and a test on trading days after 2026-10-09.
 
@@ -47,7 +47,7 @@ The data points to a timing and cost problem, not an exit-tuning problem. Enteri
 
 ## Changes after the execution-model correction
 
-The corrected model (PR #4, `1b76f5c`) moved these figures only slightly and left all five findings intact. The biggest changes: in-sample net loss grew from $823 to $847, spread cost's share of it fell from 76% to 74%, and the in-sample ask-fell gap narrowed (−0.41 vs −0.16 R before, −0.36 vs −0.18 R now) and did not repeat out-of-sample.
+The corrected model (PR #4, merged as `87195b7`) moved these figures only slightly and left all five findings intact. The biggest changes: in-sample net loss grew from $823 to $847, spread cost's share of it fell from 76% to 74%, and the in-sample ask-fell gap narrowed (−0.41 vs −0.16 R before, −0.36 vs −0.18 R now) and did not repeat out-of-sample.
 
 ## Reproduce
 

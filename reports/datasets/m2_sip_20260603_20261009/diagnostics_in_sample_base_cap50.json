@@ -1,9 +1,9 @@
 {
   "dataset": "reports\\datasets\\m2_sip_20260603_20261009",
-  "code_sha": "2472277-dirty",
+  "code_sha": "d5bdb66",
   "orders_placed": 0,
   "network_requests": 0,
-  "created_at_utc": "2026-10-14T00:38:53.770207+00:00",
+  "created_at_utc": "2026-10-14T00:53:03.192401+00:00",
   "sample": "in_sample",
   "scenario": "base_cap50",
   "signals": 3159,

@@ -1,6 +1,6 @@
 # Trade diagnostics: out_of_sample, base_cap50 (generated)
 
-Signals 1,488 · trades 117 · code `2472277-dirty` · no orders placed. Buckets with fewer than 30 trades are marked *inconclusive*. Patterns here are hypotheses, not validated edges.
+Signals 1,488 · trades 117 · code `d5bdb66` · no orders placed. Buckets with fewer than 30 trades are marked *inconclusive*. Patterns here are hypotheses, not validated edges.
 
 ## Overall
 
