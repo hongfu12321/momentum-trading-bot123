@@ -222,16 +222,21 @@ def _research(args: argparse.Namespace) -> int:
     if not args.skip_build:
         print(research.build(dataset, sample, log=print))
     cache = dataset / "cache" / "backtest_quotes"
+    blocked: dict[str, dict[str, int]] = {}
     try:
-        results = research.run_backtests(dataset, backtest.QuoteStore(provider, cache),
-                                         backtest.QuoteStore(diagnostics.CacheOnlySource(), cache), sample)  # type: ignore[arg-type]
+        results = research.run_backtests(dataset, backtest.QuoteStore(provider, cache),  # type: ignore[arg-type]
+                                         backtest.QuoteStore(diagnostics.CacheOnlySource(), cache), sample,
+                                         blocked=blocked)
     except (EntitlementError, AuthenticationError) as exc:
         print(f"error: SIP quotes blocked: {exc}", file=sys.stderr)
         return EXIT_BLOCKED
     except diagnostics.CacheMiss as exc:
         print(f"error: {exc}; rerun with --fetch-missing-quotes to download them (network)", file=sys.stderr)
         return EXIT_BLOCKED
-    for k in research.STRATEGIES[1:]:
+    for k, cov in blocked.items():
+        print(f"{k}: not backtested; quotes for {cov['missing']} of {cov['signals']} signals are not cached "
+              "(rerun with --fetch-missing-quotes to download them)")
+    for k in [k for k in research.STRATEGIES[1:] if k in results]:
         summary = {"dataset": str(dataset), "code_sha": code_version(), "orders_placed": 0, "network_requests": 0,
                    "created_at_utc": datetime.now(timezone.utc).isoformat(),
                    "provenance_variant": research.variant_provenance(dataset, sample, k),
@@ -242,11 +247,13 @@ def _research(args: argparse.Namespace) -> int:
     research.write_table(dataset / "research" / sample / "decisions.csv.gz", research.decisions(dataset, sample))
     comparison = {"dataset": str(dataset), "code_sha": code_version(),
                   "created_at_utc": datetime.now(timezone.utc).isoformat(),
-                  "quote_api_requests": provider.request_count, **research.compare(dataset, results, sample)}
+                  "quote_api_requests": provider.request_count, **research.compare(dataset, results, sample, blocked)}
     stem = f"research_comparison_{sample}"
     (dataset / f"{stem}.json").write_text(json.dumps(comparison, indent=2, default=str) + "\n", encoding="utf-8")
     (dataset / f"{stem}.md").write_text(research.render_comparison(comparison), encoding="utf-8")
     for k, v in comparison["strategies"].items():  # type: ignore[union-attr]
+        if "results" not in v:
+            continue
         r = v["results"]["all"]
         print(f"{k}: {r['trades']} trades, expectancy {r['expectancy_r']} R, net ${r['net_usd']:.2f}")
     print(f"comparison: {dataset / (stem + '.md')} ({provider.request_count} quote API requests, 0 orders)")

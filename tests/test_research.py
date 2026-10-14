@@ -103,6 +103,10 @@ def test_research_session_filters_by_point_in_time_rank() -> None:
                               [_hos_row("FLG", "04:08"), _hos_row("OUT", "04:00")], "in_sample", ScanParams())
     assert [r["symbol"] for r in res.signals["hos"]] == ["FLG", "OUT"]  # baseline unchanged
     assert res.signals["top5_hos"] == []  # neither was in the Top 5 at its trigger bar
+    # FLG's qualified, scanner-gated flag is never in the Top 5: only the unfiltered Bull Flag variant keeps it
+    assert res.signals["top5_bullflag"] == []
+    assert [(r["symbol"], r["sip_bar_start_utc"], r["top5_rank"]) for r in res.signals["bullflag"]] == [
+        ("FLG", et(DAY, "04:08").isoformat(), None)]
     assert [(r["symbol"], r["reason"]) for r in res.filtered] == [("FLG", "not_in_top5"), ("OUT", "not_in_top5")]
     alone = rs.research_session(W["premarket"], {k: bars[k] for k in ("FLG", "OUT")}, {"FLG": 1.0, "OUT": 1.0},
                                 [_hos_row("FLG", "04:08"), _hos_row("OUT", "04:00")], "in_sample", ScanParams())
@@ -142,10 +146,10 @@ def test_build_marks_missing_sessions_and_drops_incomplete_bars(tmp_path) -> Non
     assert {(r["session"], r["bars_file"]) for r in cov} == {("premarket", "found"), ("afterhours", "missing")}
     snaps = rs.read_table(ds / "research" / "in_sample" / "top5_snapshots.csv.gz")
     assert "2.15" not in {r["price"] for r in snaps}  # the incomplete 04:08 candle never reaches a ranking
-    assert out["signals"] == {"hos": 1, "top5_hos": 1, "top5_bullflag": 0}  # ranked on the 04:07 close: the 04:08
+    assert out["signals"] == {"hos": 1, "top5_hos": 1, "top5_bullflag": 0, "bullflag": 0}  # ranked on the 04:07 close: the 04:08
     # bar was incomplete, so no Bull Flag breakout on it
     complete = rs.build(_mini_dataset(tmp_path, et(DAY, "05:00")), log=lambda _: None)
-    assert complete["signals"] == {"hos": 1, "top5_hos": 1, "top5_bullflag": 1}
+    assert complete["signals"] == {"hos": 1, "top5_hos": 1, "top5_bullflag": 1, "bullflag": 1}
 
 
 def test_variants_refuse_the_out_of_sample_block(tmp_path) -> None:  # noqa: ANN001

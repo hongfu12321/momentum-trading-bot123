@@ -100,11 +100,15 @@ def session_volumes(bars: list[Bar], window: SessionWindow, exclude_auction: boo
     return [0 if skip and b.timestamp_utc == window.start_utc else b.volume for b in bars]
 
 
-def detect_flags(bars: list[Bar], window: SessionWindow, params: FlagParams = FlagParams()) -> list[dict[str, object]]:
-    """Evaluate every breakout attempt (close above the previous bar's high) in one symbol-session."""
+def detect_flags(bars: list[Bar], window: SessionWindow, params: FlagParams = FlagParams(),
+                 only: list[Bar] | None = None) -> list[dict[str, object]]:
+    """Evaluate every breakout attempt (close above the previous bar's high) in one symbol-session.
+    ``only`` restricts evaluation to those bars (a speed-up; each evaluation still reads bars[: i + 1])."""
     vols = session_volumes(bars, window, params.exclude_closing_auction_bar)
+    keep = None if only is None else {b.timestamp_utc for b in only}
     return [evaluate_flag(bars[: i + 1], vols[: i + 1], params)
-            for i in range(1, len(bars)) if bars[i].close > bars[i - 1].high]
+            for i in range(1, len(bars)) if bars[i].close > bars[i - 1].high
+            and (keep is None or bars[i].timestamp_utc in keep)]
 
 
 def flag_params_record() -> dict[str, object]:

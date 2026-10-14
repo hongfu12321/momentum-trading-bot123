@@ -35,8 +35,8 @@ from pathlib import Path
 from statistics import fmean
 
 from .backtest import (
-    SCENARIOS, BacktestResult, QuoteStore, RiskConfig, StrategyConfig, run_backtest, signals_from_breakouts, summarize,
-    with_spread_caps, write_rows,
+    SCENARIOS, BacktestResult, QuoteStore, RiskConfig, StrategyConfig, quote_stages, run_backtest, signals_from_breakouts,
+    summarize, with_spread_caps, write_rows,
 )
 from .compare import ScanParams
 from .data.market_calendar import AFTERHOURS, EXTENDED_SESSIONS, PREMARKET, SessionWindow, session_windows
@@ -46,10 +46,11 @@ from .bullflag import FlagParams, detect_flags, flag_params_record, session_volu
 from .dataset import _read_bars
 from .split import IN_SAMPLE
 
-STRATEGIES = ("hos", "top5_hos", "top5_bullflag")
+STRATEGIES = ("hos", "top5_hos", "top5_bullflag", "bullflag")
 # "Top 5" is ranked within the dataset's cached sub-$20 universe, never the market-wide gainers list.
 STRATEGY_LABELS = {"hos": "Original HOS Breakout", "top5_hos": "Top 5 (cached universe) HOS Breakout",
-                   "top5_bullflag": "Top 5 (cached universe) + Bull Flag Breakout"}
+                   "top5_bullflag": "Top 5 (cached universe) + Bull Flag Breakout",
+                   "bullflag": "Bull Flag Breakout (no Top 5 filter)"}
 SCENARIO = "base_cap50"  # the frozen configuration from reports/m2_backtest.md
 UNIVERSE = "cached_eligible_sub20"  # recorded on every ranking row: never the market-wide top-gainers list
 
@@ -264,13 +265,28 @@ def research_session(window: SessionWindow, bars: Mapping[str, list[Bar]], refs:
         else:
             signals["top5_hos"].append({**r, "top5_rank": k})
     flags: list[dict[str, object]] = []
-    for sym in members:
-        rows = bars.get(sym, [])
+    member_set = set(members)
+    for sym in sorted(s for s in bars if refs.get(s, 0) > 0):
+        rows = bars[sym]
         ctx = bar_context(rows, refs[sym], window, scan)
+        if sym not in member_set:  # no Top 5 filter: only scanner-gated attempts can become signals
+            gated = [b for b in rows if ctx[_iso(b.timestamp_utc)]["candidate_gate"]]
+            if not gated:
+                continue
+            for f in detect_flags(rows, window, flag_params, only=gated):
+                c = ctx[str(f["breakout_bar_start_utc"])]
+                if f["qualified"]:
+                    signals["bullflag"].append(_signal_row(sym, d, session, sample, str(f["breakout_bar_start_utc"]),
+                                                           str(f["available_utc"]), float(f["breakout_price"]), c,  # type: ignore[arg-type]
+                                                           top5_rank=None))
+            continue
         for f in detect_flags(rows, window, flag_params):
             t = str(f["breakout_bar_start_utc"])
             k = rank.get((sym, t))
             c = ctx[t]
+            if f["qualified"] and c["candidate_gate"]:  # Top 5 membership is not required here
+                signals["bullflag"].append(_signal_row(sym, d, session, sample, t, str(f["available_utc"]),
+                                                       float(f["breakout_price"]), c, top5_rank=k))  # type: ignore[arg-type]
             rec = {"symbol": sym, "trading_date": d, "session": session, "sample": sample, **f, "top5_rank": k,
                    "candidate_gate": c["candidate_gate"], "change_pct": float(c["change_vs_ref"]) * 100}  # type: ignore[arg-type]
             flags.append(rec)
@@ -362,11 +378,27 @@ def backtest_paths(dataset: Path, sample: str, strategy: str) -> Path:
     return dataset / "backtest" / sub
 
 
+def quote_coverage(dataset: Path, rows: list[Mapping[str, str]], sample: str = IN_SAMPLE,
+                   strat: StrategyConfig = StrategyConfig()) -> dict[str, int]:
+    """How many signals have both quote windows (entry and holding) in the local quote cache."""
+    cache = dataset / "cache" / "backtest_quotes"
+    sigs = signals_from_breakouts(rows, {sample})
+    both = 0
+    for sig in sigs:
+        (e0, e1), (h0, h1) = quote_stages(sig, strat)
+        both += all((cache / f"{sig.symbol}_{a:%Y%m%dT%H%M%S}_{b:%H%M%S}.jsonl.gz").is_file()
+                    for a, b in ((e0, e1), (h0, h1)) if b > a)
+    return {"signals": len(sigs), "both_windows_cached": both, "missing": len(sigs) - both}
+
+
 def run_backtests(dataset: Path, store: QuoteStore, cache_only: QuoteStore, sample: str = IN_SAMPLE,
                   strat: StrategyConfig = StrategyConfig(), risk: RiskConfig = RiskConfig(),
-                  ) -> dict[str, BacktestResult]:
-    """All three strategies with the frozen base 50 bps execution model. The baseline is rerun from
-    cache only and must reproduce the committed PR #4 ledgers exactly."""
+                  blocked: dict[str, dict[str, int]] | None = None) -> dict[str, BacktestResult]:
+    """Every strategy with the frozen base 50 bps execution model. The baseline is rerun from cache
+    only and must reproduce the committed PR #4 ledgers exactly. A variant whose quotes are missing
+    from a cache-only store is not backtested: it is left out of the results and its quote coverage is
+    recorded in ``blocked`` (never a partial backtest that silently drops signals)."""
+    from .diagnostics import CacheMiss
     if sample != IN_SAMPLE:
         raise ValueError("variants are in-sample only")
     (cfg,) = with_spread_caps([SCENARIOS["base"]], [50])
@@ -374,7 +406,14 @@ def run_backtests(dataset: Path, store: QuoteStore, cache_only: QuoteStore, samp
     out: dict[str, BacktestResult] = {}
     for k in STRATEGIES:
         rows = read_table(dataset / "research" / sample / f"signals_{k}.csv")
-        res = run_backtest(signals_from_breakouts(rows, {sample}), cache_only if k == "hos" else store, cfg, strat, risk)
+        try:
+            res = run_backtest(signals_from_breakouts(rows, {sample}), cache_only if k == "hos" else store, cfg, strat,
+                               risk)
+        except CacheMiss:
+            if k == "hos" or blocked is None:
+                raise
+            blocked[k] = quote_coverage(dataset, rows, sample, strat)
+            continue
         path = backtest_paths(dataset, sample, k)
         if k == "hos":
             fresh = path.parent / f".rerun_{SCENARIO}"
@@ -403,7 +442,7 @@ def _consistency(results: Mapping[str, BacktestResult]) -> dict[str, object]:
 
     base = evaluated(results["hos"])
     out: dict[str, object] = {}
-    for k in STRATEGIES[1:]:
+    for k in [k for k in STRATEGIES[1:] if k in results]:
         other = evaluated(results[k])
         common = base.keys() & other.keys()
         out[k] = {"common_evaluated_signals": len(common),
@@ -411,7 +450,8 @@ def _consistency(results: Mapping[str, BacktestResult]) -> dict[str, object]:
     return out
 
 
-def compare(dataset: Path, results: Mapping[str, BacktestResult], sample: str = IN_SAMPLE) -> dict[str, object]:
+def compare(dataset: Path, results: Mapping[str, BacktestResult], sample: str = IN_SAMPLE,
+            blocked: Mapping[str, Mapping[str, int]] | None = None) -> dict[str, object]:
     """Aggregate, symbol-free comparison of the three strategies on the same sessions."""
     base = dataset / "research" / sample
     coverage = read_table(base / "top5_coverage.csv")
@@ -421,11 +461,13 @@ def compare(dataset: Path, results: Mapping[str, BacktestResult], sample: str = 
     short_key = next((k for k in found[0] if k.startswith("minutes_with_fewer")), "") if found else ""
     strategies = {}
     for k in STRATEGIES:
-        s = summarize(results[k])
         signals = read_table(base / f"signals_{k}.csv")
         strategies[k] = {"label": STRATEGY_LABELS[k], "signals_to_backtest": len(signals),
-                         "filtered_before_backtest": dict(Counter(r["reason"] for r in filtered if r["strategy"] == k)),
-                         "results": s}
+                         "filtered_before_backtest": dict(Counter(r["reason"] for r in filtered if r["strategy"] == k))}
+        if k in results:
+            strategies[k]["results"] = summarize(results[k])
+        else:  # never backtested on partial quotes: see quote_coverage
+            strategies[k]["blocked_missing_quotes"] = dict((blocked or {}).get(k, {}))
     return {
         "sample": sample, "scenario": SCENARIO, "orders_placed": 0,
         "status": "exploratory hypotheses (in-sample only); not validated",
@@ -501,6 +543,12 @@ def render_comparison(c: Mapping[str, object]) -> str:
               "fill rate | win rate | avg R | 95% CI | net $ | profit factor | max drawdown $ |",
               "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|"]
         for v in st.values():
+            if "results" not in v:
+                cov = v["blocked_missing_quotes"]
+                L.append(f"| {v['label']} | {v['signals_to_backtest']} | not backtested: quotes for "
+                         f"{cov.get('missing')} of {cov.get('signals')} signals are not cached (cache-only run) |"
+                         + " |" * 10)
+                continue
             r = v["results"][session]
             ci = r["expectancy_r_ci95_bootstrap"]
             ie = r["incomplete_exits"]
@@ -513,7 +561,9 @@ def render_comparison(c: Mapping[str, object]) -> str:
         L.append("")
     L += ["## Portfolio skips (shared daily risk budget)", "", "| strategy | skipped, by reason |", "|---|---|"]
     for v in st.values():
-        L.append(f"| {v['label']} | {', '.join(f'{k} {n}' for k, n in sorted(v['results']['all']['skipped'].items()))} |")
+        if "results" in v:
+            L.append(f"| {v['label']} | "
+                     f"{', '.join(f'{k} {n}' for k, n in sorted(v['results']['all']['skipped'].items()))} |")
     L += ["", "## Execution-model isolation", "",
           "The per-signal simulation is shared, so a signal evaluated by both the baseline and a variant must get "
           "the same outcome. Differences in P&L then come only from which signals are taken (the filter and the "
