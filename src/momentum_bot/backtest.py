@@ -125,6 +125,9 @@ SCENARIOS: dict[str, ExecConfig] = {
 class StrategyConfig:
     """Untuned research hypotheses, fixed before any backtest was run."""
 
+    # Entries act only after the 1-minute trigger bar has closed above the earlier session high.
+    # Intrabar resistance-cross entries are a separate, untested strategy, not a setting of this one.
+    entry_trigger: str = "candle_close_confirmation"
     stop_pct: float = 0.03
     target_r: float = 2.0
     max_hold: timedelta = timedelta(minutes=15)
