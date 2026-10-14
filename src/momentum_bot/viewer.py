@@ -254,6 +254,38 @@ with chart_tab:
             t = pd.Timestamp(evs[i]["t"])
             focus = ((t - pd.Timedelta(minutes=15)).isoformat(), (t + pd.Timedelta(minutes=20)).isoformat())
         st.plotly_chart(charts.figure(data, sym, focus), use_container_width=True)
+        # The selected stock's signals and trades, so the chart can be read without switching tabs.
+        sig = pd.DataFrame([r for r in data.signals if r["symbol"] == sym])
+        st.markdown(f"**{sym} signals this session**")
+        if sig.empty:
+            st.info(f"No signals for {sym}; it met the scanner rules only.")
+        else:
+            sig = sig.sort_values("signal_available_utc", kind="stable")
+            st.dataframe(pd.DataFrame({
+                "signal known (ET)": et(sig["signal_available_utc"]),
+                "trigger bar (ET)": et(sig["signal_bar_start_utc"]).str[:5],
+                "price": sig.get("price"), "change %": pd.to_numeric(sig.get("change_pct"), errors="coerce"),
+                "volume ratio": pd.to_numeric(sig.get("volume_ratio"), errors="coerce"),
+                "spread bps": pd.to_numeric(sig.get("signal_spread_bps"), errors="coerce"),
+                "outcome": sig["outcome"], "reason": sig["reason"]}), hide_index=True, use_container_width=True,
+                column_config={c: st.column_config.NumberColumn(format="%.2f")
+                               for c in ("change %", "volume ratio", "spread bps")})
+        trd = pd.DataFrame([t for t in T.trades.get((d, session), []) if t["symbol"] == sym])
+        st.markdown(f"**{sym} trades this session**")
+        if trd.empty:
+            st.info(f"No simulated entries for {sym} in this session.")
+        else:
+            trd = trd.sort_values("entry_first_fill_utc").reset_index(drop=True)
+            num = lambda c: pd.to_numeric(trd[c], errors="coerce")  # noqa: E731
+            st.dataframe(pd.DataFrame({
+                "entry fill (ET)": et(trd["entry_first_fill_utc"], ms=True), "entry price": num("entry_price"),
+                "shares": num("filled_qty"), "exit": trd["exit_reason"],
+                "exit fill (ET)": et(trd["exit_last_fill_utc"], ms=True), "exit price": num("exit_price"),
+                "outcome": trd["outcome"], "R": num("r_multiple"), "net $ (completed)": num("net_usd"),
+                "MFE R": num("mfe_r"), "MAE R": num("mae_r"), "spread cost $": num("spread_cost_usd")}),
+                hide_index=True, use_container_width=True,
+                column_config={c: st.column_config.NumberColumn(format="%.2f")
+                               for c in ("R", "net $ (completed)", "MFE R", "MAE R", "spread cost $")})
         with st.expander("Recorded events for this stock (exact ET timestamps)"):
             ev = pd.DataFrame(charts.chart_events(data, sym))
             if not ev.empty:
