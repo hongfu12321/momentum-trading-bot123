@@ -73,6 +73,13 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--skip-build", action="store_true", help="Reuse research/in_sample rankings and signal sets")
     rs.add_argument("--fetch-missing-quotes", action="store_true",
                     help="Allow SIP quote downloads for variant signals not in the quote cache (default: cache only)")
+    bi = sub.add_parser("m2-bullflag-intrabar",
+                        help="Bull Flag intrabar breakout research, in-sample, cache-only, read-only (no orders).")
+    bi.add_argument("--dataset", required=True, help="Dataset folder with references.csv.gz")
+    bi.add_argument("--out-dir", default="research_out/bull_flag_intrabar",
+                    help="Per-setup and per-trade outputs (local, git-ignored); never inside the dataset")
+    bi.add_argument("--summary", default="reports/research_program/bull_flag_intrabar_summary.json",
+                    help="Aggregate, symbol-free summary (committed)")
     bt = sub.add_parser("m2-backtest", help="Simulate the breakout strategy against historical SIP quotes (no orders).")
     bt.add_argument("--dataset", required=True, help="Dataset folder built by m1-dataset")
     bt.add_argument("--sample", choices=("in_sample", "out_of_sample"), default="in_sample")
@@ -121,6 +128,8 @@ def main(argv: list[str] | None = None) -> int:
         return _quote_probe(args)
     if args.command == "m2-research":
         return _research(args)
+    if args.command == "m2-bullflag-intrabar":
+        return _bullflag_intrabar(args)
     if args.command == "m2-backtest":
         return _backtest(args)
     if args.command == "m2-diagnostics":
@@ -258,6 +267,30 @@ def _research(args: argparse.Namespace) -> int:
         print(f"{k}: {r['trades']} trades, expectancy {r['expectancy_r']} R, net ${r['net_usd']:.2f}")
     print(f"comparison: {dataset / (stem + '.md')} ({provider.request_count} quote API requests, 0 orders)")
     return EXIT_OK
+
+
+def _bullflag_intrabar(args: argparse.Namespace) -> int:
+    from . import bullflag_intrabar
+
+    dataset, out = Path(args.dataset).resolve(), Path(args.out_dir).resolve()
+    if dataset == out or dataset in out.parents:
+        print("error: --out-dir must be outside the dataset folder (the dataset is read-only)", file=sys.stderr)
+        return EXIT_USAGE
+    if not (dataset / "references.csv.gz").is_file():
+        print(f"error: {dataset / 'references.csv.gz'} not found", file=sys.stderr)
+        return EXIT_USAGE
+    result = {"dataset": Path(args.dataset).as_posix(), "code_sha": code_version(),
+              "created_at_utc": datetime.now(timezone.utc).isoformat(),
+              **bullflag_intrabar.run_research(dataset, out)}
+    path = Path(args.summary)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8", newline="\n")
+    for k, v in result["strategies"].items():  # type: ignore[union-attr]
+        b = v["base"]
+        print(f"{k}: {b['setups_detected']} setups, {b['entries']} entries, {b['completed_trades']} completed, "
+              f"net ${b['net_usd']:.2f}, NBBO-covered setups {v['quote_coverage']['nbbo_covered']}")
+    print(f"summary: {path} (inputs unchanged: {result['inputs_unchanged']}; 0 network requests, 0 orders)")
+    return EXIT_OK if result["inputs_unchanged"] else EXIT_MISMATCH
 
 
 def _backtest(args: argparse.Namespace) -> int:
