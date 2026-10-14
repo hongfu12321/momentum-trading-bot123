@@ -88,6 +88,19 @@ def build_parser() -> argparse.ArgumentParser:
     ch.add_argument("--session", choices=("premarket", "afterhours"), default="premarket")
     vc = sub.add_parser("m2-viewer-check", help="Audit what the replay viewer shows against the backtest ledgers (offline).")
     vc.add_argument("--dataset", default="reports/datasets/m2_sip_20260603_20261009", help="Dataset folder")
+    bk = sub.add_parser("dataset-backup", help="Snapshot a dataset to a private rclone remote (dry run unless --confirm).")
+    bk.add_argument("--dataset", required=True, help="Dataset folder, e.g. reports/datasets/m2_sip_20260603_20261009")
+    bk.add_argument("--remote", required=True, help="rclone remote and folder, e.g. gdrive:trading-research")
+    bk.add_argument("--confirm", action="store_true", help="Upload. Without it, only the plan and size are printed")
+    rt = sub.add_parser("dataset-restore", help="Download and verify a snapshot into a new folder (never overwrites).")
+    rt.add_argument("--snapshot", required=True, help="Snapshot id from dataset-list")
+    rt.add_argument("--remote", required=True, help="rclone remote and folder, e.g. gdrive:trading-research")
+    rt.add_argument("--destination", required=True, help="New dataset folder; must not exist")
+    ls = sub.add_parser("dataset-list", help="List dataset snapshots on a remote, complete or not.")
+    ls.add_argument("--remote", required=True, help="rclone remote and folder, e.g. gdrive:trading-research")
+    vf = sub.add_parser("dataset-verify", help="Verify a dataset folder against snapshot checksums (offline).")
+    vf.add_argument("--dataset", required=True, help="Dataset folder")
+    vf.add_argument("--checksums", help="checksums.json; default <dataset>/.snapshot/checksums.json")
     vw = sub.add_parser("m2-viewer", help="Launch the localhost historical replay viewer (Streamlit, 127.0.0.1 only).")
     vw.add_argument("--dataset", default="reports/datasets/m2_sip_20260603_20261009", help="Dataset folder")
     vw.add_argument("--port", type=int, default=8501)
@@ -111,6 +124,8 @@ def main(argv: list[str] | None = None) -> int:
         return _viewer(args)
     if args.command == "m2-viewer-check":
         return _viewer_check(args)
+    if args.command.startswith("dataset-"):
+        return _dataset_snapshot(args)
     symbols = _symbols(args)
     if not symbols:
         print("error: provide --symbols or --symbols-file", file=sys.stderr)
@@ -303,6 +318,36 @@ def _viewer(args: argparse.Namespace) -> int:
     cmd = [sys.executable, "-m", "streamlit", "run", str(app), "--server.address", "127.0.0.1",
            "--server.port", str(args.port), "--browser.gatherUsageStats", "false", "--", "--dataset", args.dataset]
     return subprocess.call(cmd)
+
+
+def _dataset_snapshot(args: argparse.Namespace) -> int:
+    from . import backup as bk
+
+    try:
+        if args.command == "dataset-verify":
+            problems = bk.verify_dataset(Path(args.dataset), Path(args.checksums) if args.checksums else None)
+            print("\n".join(problems) if problems else f"{args.dataset}: every file matches the snapshot checksums")
+            return EXIT_OK if not problems else EXIT_MISMATCH
+        if args.command == "dataset-list":
+            for r in bk.list_snapshots(args.remote, bk.transport_for(args.remote)):
+                print(f"{r['dataset_name']}  {r['snapshot_id']}  {'COMPLETE' if r['complete'] else 'INCOMPLETE'}  "
+                      f"{r['files']} files  {int(r['bytes']) / 1e6:,.1f} MB")
+            return EXIT_OK
+        if args.command == "dataset-restore":
+            bk.restore(args.remote, args.snapshot, Path(args.destination), bk.transport_for(args.remote))
+            return EXIT_OK
+        plan = bk.plan_backup(Path(args.dataset), args.remote, commit=bk.source_commit(Path(__file__).parents[2]))
+        print(f"snapshot {plan.snapshot_id}: {plan.manifest['file_count']} files, "
+              f"{plan.inventory.total_bytes / 1e6:,.1f} MB -> {plan.remote_dir}")
+        print(f"excluded: {plan.inventory.excluded or 'nothing'}; source commit {plan.manifest['source_commit']}")
+        if not args.confirm:
+            print("dry run: nothing uploaded. Re-run with --confirm to upload this snapshot.")
+            return EXIT_OK
+        bk.backup(plan, bk.transport_for(args.remote))
+        return EXIT_OK
+    except bk.BackupError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_PARTIAL
 
 
 if __name__ == "__main__":

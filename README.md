@@ -119,6 +119,10 @@ Replays only the cached backtest quotes and makes no network requests. It writes
 
 `m2-viewer` serves a Streamlit app on 127.0.0.1:8501 that replays the baseline backtest day by day from local files: scanner signals with their outcomes and reason codes, annotated 1-minute SIP candlestick charts with entry, exit, stop and target markers, trades and a daily P&L summary. It shows a **Historical Replay — Not Live** banner, makes no network requests and never reruns a backtest. Before anything is shown, each sample's ledgers are checked against the provenance `m2-diagnostics` recorded, and a mismatched sample is refused with the reason. All times are US Eastern. `m2-chart --date YYYY-MM-DD --session premarket` exports a session's charts to standalone HTML. `m2-viewer-check` audits every total and chart marker the viewer would show against the backtest ledgers, offline. Details, including the canonical CRLF/LF hashing policy: `docs/m2_replay_viewer.md`.
 
+## Dataset backup and restore (private Google Drive via rclone)
+
+`dataset-backup` uploads a dataset folder as an immutable, checksummed snapshot. It is a dry run unless you pass `--confirm`, and a snapshot is marked complete only after the remote copy is verified. `dataset-list` lists snapshots, `dataset-restore` downloads into a new folder and verifies every file before moving it into place, and `dataset-verify` checks a dataset offline. All copies are copy-only and never overwrite. Setup, commands and the licensing caveat: `docs/dataset_backup_restore.md`.
+
 ## Licensed data stays local
 
 Raw bars, quotes, per-symbol tables and input snapshots are Alpaca or third-party data and are git-ignored. Only aggregate outputs are committed: `report.md`, `manifest.json` (including the sha256 of every input snapshot), count-only `eligibility.csv`, `quote_probe_summary.json`, `backtest_summary_*.json` and `diagnostics_*.{json,md}`. The viewer and exported charts stay local.
