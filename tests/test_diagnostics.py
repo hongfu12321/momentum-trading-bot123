@@ -139,3 +139,65 @@ def test_report_and_dashboard_are_self_contained(tmp_path) -> None:  # noqa: ANN
     dg.write_dashboard(tmp_path / "d.html", [rec], [trade], "in_sample", "base_cap50")
     html = (tmp_path / "d.html").read_text(encoding="utf-8")
     assert "<script src" not in html and "http" not in html.replace("http://www.w3.org/2000/svg", "")
+
+
+def test_engine_to_dashboard_reconciliation_with_an_incomplete_exit(tmp_path) -> None:  # noqa: ANN001
+    """End to end on the corrected PR #4 engine: backtest summary, trade ledger, diagnostics aggregates and the
+    dashboard's embedded rows must agree, with the incomplete exit kept out of net P&L and R."""
+    import csv
+    import json
+    import math
+    import re
+
+    from conftest import et
+
+    from momentum_bot.backtest import run_backtest, signals_from_breakouts, summarize, with_spread_caps, write_rows
+
+    d1, d2 = datetime(2024, 3, 8).date(), datetime(2024, 3, 11).date()
+    a0, b0 = et(d1, "05:01"), et(d2, "05:01")  # signal availability (bar 05:00 completed)
+    q = lambda t, bid, ask: {"t": t.isoformat().replace("+00:00", "Z"), "bp": bid, "ap": ask, "bs": 1000, "as": 1000}  # noqa: E731
+    script = {"A": [q(a0 - timedelta(seconds=1), 9.99, 10.0), q(a0 + timedelta(seconds=20), 9.60, 9.62)],  # stop hit
+              "B": [q(b0 - timedelta(seconds=1), 9.99, 10.0)]}  # no quote after the fill: the exit cannot sell
+
+    class Scripted:
+        request_count = bytes_received = 0
+
+        def iter_quotes(self, symbol, feed, start, end):  # noqa: ANN001, ANN201
+            return iter(script[symbol])
+
+    rows = [{"kind": "breakout", "symbol": s, "trading_date": d.isoformat(), "session": "premarket", "sample": "in_sample",
+             "sip_bar_start_utc": (t - timedelta(minutes=1)).isoformat(), "sip_signal_available_utc": t.isoformat(),
+             "sip_price": "10.0", "sip_change_vs_ref": "0.5", "sip_session_volume": "500000", "sip_volume_ratio": "3",
+             "sip_prior_session_high": "9.9", "sip_candidate_gate": "True"} for s, d, t in (("A", d1, a0), ("B", d2, b0))]
+    with (tmp_path / "breakout_matches.csv").open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    (cfg,) = with_spread_caps([dg.SCENARIOS["base"]], [50])
+    res = run_backtest(signals_from_breakouts(rows, {"in_sample"}), QuoteStore(Scripted(), tmp_path / "cache" / "backtest_quotes"), cfg)  # type: ignore[arg-type]
+    bt = tmp_path / "backtest" / "in_sample" / "base_cap50"
+    write_rows(bt / "trades.csv", res.trades)
+    write_rows(bt / "attempts.csv", res.attempts)
+    engine = summarize(res)["all"]
+    done, open_ = (next(t for t in res.trades if t.symbol == s) for s in ("A", "B"))
+    assert done.exit_complete and not open_.exit_complete and open_.exit_qty == 0 and open_.net_usd is None
+
+    s = dg.run(tmp_path, "in_sample", "base_cap50")  # cache only from here on
+    ledger = list(csv.DictReader((tmp_path / "diagnostics" / "in_sample" / "base_cap50" / "trade_ledger.csv").open(encoding="utf-8")))
+    assert (s["entries"], s["completed_trades"], engine["entries"], engine["trades"]) == (2, 1, 2, 1)
+    assert s["overall"]["avg_r"] == pytest.approx(engine["expectancy_r"]) == pytest.approx(done.r_multiple)
+    assert s["overall"]["win_rate"] == engine["win_rate"]
+    assert s["pnl"]["realized_usd"] == pytest.approx(engine["net_usd"] + engine["incomplete_exits"]["realized_net_usd"])
+    assert s["pnl"]["marked_usd"] == pytest.approx(engine["incomplete_exits"]["unrealized_mark_usd"]) == pytest.approx(
+        (9.99 - open_.entry_price) * open_.remaining_qty)
+    assert s["execution"]["incomplete_exits"] == engine["incomplete_exits"]["count"] == 1
+    row_b = next(r for r in ledger if r["symbol"] == "B")
+    assert (row_b["net_usd"], row_b["r_multiple"], row_b["exit_price"], row_b["spread_cost_usd"]) == ("", "", "", "")
+    assert row_b["outcome"] == "incomplete_exit" and row_b["remaining_qty"] == str(open_.remaining_qty)
+    html = (tmp_path / "diagnostics" / "in_sample" / "base_cap50" / "dashboard.html").read_text(encoding="utf-8")
+    data = json.loads(re.search(r"const D=(.*?);\n", html).group(1))  # type: ignore[union-attr]
+    completed = [t for t in data["trades"] if t["r_multiple"] is not None]  # the dashboard's own KPI filter
+    assert len(data["trades"]) == 2 and len(completed) == 1
+    assert sum(t["net_usd"] for t in completed) == pytest.approx(engine["net_usd"])
+    assert [t["marked_usd"] for t in data["trades"] if t["r_multiple"] is None] == [pytest.approx(s["pnl"]["marked_usd"])]
+    assert not any(isinstance(v, float) and math.isnan(v) for t in data["trades"] for v in t.values())
