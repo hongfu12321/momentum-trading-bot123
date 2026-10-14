@@ -92,15 +92,23 @@ Snapshots are saved under `inputs/` and raw bars under `cache/`; rerunning on th
 momentum-bot m2-quote-probe --dataset reports/datasets/m2_sip_20260603_20261009 --sample 60 --minutes 30
 ```
 
-Samples scanner candidates deterministically, fetches SIP NBBO quotes for the window after each trigger, and reports availability, spreads, locked/crossed quotes, gaps and the cost of fetching quotes for every candidate. Raw quotes stay in the local cache.
+Samples scanner candidates deterministically, fetches SIP NBBO quotes for the window starting when each trigger bar completes, and reports availability, fresh-quote coverage (quotes at most 3 s old), executable spreads, locked/crossed quotes as diagnostics, gaps and the cost of fetching quotes for every candidate. Raw quotes stay in the local cache.
+
+## Quote-aware backtest (simulation only)
+
+```bash
+momentum-bot m2-backtest --dataset reports/datasets/m2_sip_20260603_20261009 --sample in_sample
+```
+
+Simulates the candidate-gated SIP breakout strategy (`candle_close_confirmation`: entries only after the trigger bar closes; intrabar resistance-cross entries are a separate future strategy) against historical SIP quotes in three scenarios (`idealized` reference, quote-aware `base`, `stress`). Orders reach the market only after the trigger bar completes plus latency. They fill only on fresh, executable quotes within the spread cap and displayed size; the same displayed shares are never taken twice, and the unfilled remainder expires after the entry timeout. Exits that do not fully fill within 2 minutes are reported as incomplete, with unsold shares marked separately from realized P&L. Fees and risk limits follow `docs/DESIGN.md`. The aggregate result goes to `backtest_summary_<sample>.json`; per-trade rows stay local under `backtest/`. Out-of-sample runs require `--confirm-out-of-sample` and should be run once, with frozen settings. Results: `reports/m2_backtest.md`. Spread-cap comparison on in-sample data: `--spread-caps 50,100,150,200`; the frozen out-of-sample run: `--sample out_of_sample --spread-caps 50 --confirm-out-of-sample`.
 
 ## Licensed data stays local
 
-Raw bars, quotes, per-symbol tables and input snapshots are Alpaca or third-party data and are git-ignored. Only aggregate outputs are committed: `report.md`, `manifest.json` (including the sha256 of every input snapshot), count-only `eligibility.csv` and `quote_probe_summary.json`.
+Raw bars, quotes, per-symbol tables and input snapshots are Alpaca or third-party data and are git-ignored. Only aggregate outputs are committed: `report.md`, `manifest.json` (including the sha256 of every input snapshot), count-only `eligibility.csv`, `quote_probe_summary.json` and `backtest_summary_*.json`.
 
 ## Safety
 
-No code path places, replaces or cancels orders. Market data comes from `data.alpaca.markets`. The only trading-host call is the read-only `GET /v2/assets` on `paper-api.alpaca.markets`, which refuses live-looking keys. A test enforces both.
+No code path places, replaces or cancels orders; the backtest is an offline simulation with no broker client. Market data comes from `data.alpaca.markets`. The only trading-host call is the read-only `GET /v2/assets` on `paper-api.alpaca.markets`, which refuses live-looking keys. A test enforces both.
 
 ## Tests
 
