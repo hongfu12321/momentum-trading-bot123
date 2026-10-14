@@ -88,7 +88,8 @@ def test_diagnose_trade_flags_and_missing_quotes() -> None:
          "exit_trigger_utc": (T0 + timedelta(seconds=50)).isoformat(),
          "exit_last_fill_utc": (T0 + timedelta(seconds=50.5)).isoformat(), "exit_reason": "stop",
          "exit_complete": "True", "seconds_to_fill": "0.5", "exit_price": "9.69", "net_usd": "-15.6",
-         "gross_usd": "-15.5", "fees_usd": "0.1", "r_multiple": "-1.04"}
+         "gross_usd": "-15.5", "fees_usd": "0.1", "r_multiple": "-1.04", "exit_qty": "50", "remaining_qty": "0",
+         "realized_net_usd": "-15.6", "mark_utc": "", "mark_price": "nan", "unrealized_usd": "0.0"}
     quotes = [qt(0, 9.99, 10.0), qt(20, 10.32, 10.33), qt(50, 9.69, 9.71)]
     d = dg.diagnose_trade(rec, t, quotes, True, T0 + timedelta(minutes=17), strat, ["a.jsonl.gz", "b.jsonl.gz"])
     assert d["stopped_after_1r_favorable"] and d["fast_reversal"] and not d["near_target_reversal"]
@@ -98,6 +99,32 @@ def test_diagnose_trade_flags_and_missing_quotes() -> None:
     missing = dg.diagnose_trade(rec, t, [], False, T0, strat, [])
     assert missing["mfe_r"] is None and missing["move_1m_r"] is None and missing["quote_files"] == ""
     assert missing["exit_slippage_bps"] is None  # unknown, not assumed zero
+
+
+def test_incomplete_exit_has_no_net_or_r_and_is_kept_out_of_r_stats() -> None:
+    strat = StrategyConfig()
+    rec = {"signal_bid": 9.99, "signal_ask": 10.0, "session": "premarket", "hour_et": 5, "outcome": "incomplete_exit",
+           "reason": "filled", "quotes_cached": True}
+    t = {"entry_price": "10.0", "qty": "50", "requested_qty": "50", "entry_first_fill_utc": T0.isoformat(),
+         "exit_trigger_utc": (T0 + timedelta(seconds=50)).isoformat(),
+         "exit_last_fill_utc": (T0 + timedelta(seconds=170)).isoformat(), "exit_reason": "time",
+         "exit_complete": "False", "seconds_to_fill": "0.5", "exit_price": "nan", "net_usd": "", "r_multiple": "",
+         "gross_usd": "0.0", "fees_usd": "0.0", "exit_qty": "0", "remaining_qty": "50", "realized_net_usd": "0.0",
+         "mark_utc": (T0 + timedelta(seconds=170)).isoformat(), "mark_price": "9.9", "unrealized_usd": "-5.0"}
+    d = dg.diagnose_trade(rec, t, [qt(0, 9.99, 10.0), qt(50, 9.9, 9.95)], True, T0 + timedelta(minutes=17), strat, [])
+    assert d["net_usd"] is None and d["r_multiple"] is None and d["exit_price"] is None
+    assert d["exit_slippage_bps"] is None and d["spread_cost_usd"] is None  # nothing sold: no exit cost to report
+    assert (d["realized_usd"], d["marked_usd"], d["remaining_qty"]) == (0.0, -5.0, 50)
+    unmarked = dg.diagnose_trade(rec, {**t, "mark_price": "nan", "unrealized_usd": "0.0"}, [], False, T0, strat, [])
+    assert unmarked["marked_usd"] is None  # never shown as a zero mark
+    done = {**d, "outcome": "completed", "exit_complete": True, "r_multiple": -1.0, "net_usd": -15.0, "marked_usd": None,
+            "realized_usd": -15.0, "remaining_qty": 0, "spread_cost_usd": 1.0, "quote_files": "a"}
+    s = dg.summarize([rec, {**rec, "outcome": "completed"}], [d, done], "in_sample", "base_cap50")
+    assert (s["entries"], s["completed_trades"], s["overall"]["n"]) == (2, 1, 1)
+    assert s["execution"]["incomplete_exits"] == 1 and s["execution"]["incomplete_exit_shares_unsold"] == 50
+    assert s["pnl"]["marked_usd"] == -5.0 and s["pnl"]["realized_usd"] == -15.0
+    assert all(b["n"] == 1 for b in s["breakdowns_entry_time"]["session"])
+    assert "Entries 2; completed trades 1; incomplete exits 1" in dg.render_report(s)
 
 
 def test_report_and_dashboard_are_self_contained(tmp_path) -> None:  # noqa: ANN001

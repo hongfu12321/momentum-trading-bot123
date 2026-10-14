@@ -130,7 +130,8 @@ def breakdown(trades: list[Mapping[str, object]], key: str, edges: list[float] |
     for t in trades:
         v = t.get(key)
         label = bucket_of(v, edges) if edges else ("unknown" if v is None else str(v))  # type: ignore[arg-type]
-        groups.setdefault(label, []).append(float(t["r_multiple"]))  # type: ignore[arg-type]
+        if t.get("r_multiple") is not None:  # incomplete exits have no R
+            groups.setdefault(label, []).append(float(t["r_multiple"]))  # type: ignore[arg-type]
 
     def sort_key(label: str) -> tuple:
         if order and label in order:
@@ -233,7 +234,11 @@ def diagnose_trade(sig_rec: Mapping[str, object], t: Mapping[str, str], quotes: 
     risk = entry * strat.stop_pct
     t_fill = datetime.fromisoformat(t["entry_first_fill_utc"])
     t_exit = datetime.fromisoformat(t["exit_trigger_utc"])
-    exit_px, net, gross, fees = (float(t[k]) for k in ("exit_price", "net_usd", "gross_usd", "fees_usd"))
+    # Corrected model (PR #4): exit_price is nan when nothing sold; net_usd and r_multiple are empty for
+    # incomplete exits, whose unsold remainder is marked separately and never counted as realized.
+    complete = t["exit_complete"] == "True"
+    exit_px, net, r_mult, mark = (_f(t.get(k)) for k in ("exit_price", "net_usd", "r_multiple", "mark_price"))
+    gross, fees, realized = (float(t[k]) for k in ("gross_usd", "fees_usd", "realized_net_usd"))
     ask0, bid0 = sig_rec.get("signal_ask"), sig_rec.get("signal_bid")
     qx = prevailing(quotes, t_exit, executable=True) if cached else None
     half_entry = (float(ask0) - float(bid0)) / 2 if ask0 and bid0 else None  # type: ignore[arg-type]
@@ -243,19 +248,25 @@ def diagnose_trade(sig_rec: Mapping[str, object], t: Mapping[str, str], quotes: 
         "requested_qty": requested, "filled_qty": qty, "fill": "partial" if qty < requested else "full",
         "entry_first_fill_utc": t["entry_first_fill_utc"], "exit_trigger_utc": t["exit_trigger_utc"],
         "exit_last_fill_utc": t["exit_last_fill_utc"], "exit_reason": t["exit_reason"],
-        "exit_complete": t["exit_complete"] == "True",
+        "exit_complete": complete,
+        "exit_qty": int(t["exit_qty"]), "remaining_qty": int(t["remaining_qty"]),
         "seconds_to_fill": float(t["seconds_to_fill"]),
         "holding_seconds": (datetime.fromisoformat(t["exit_last_fill_utc"]) - t_fill).total_seconds(),
         "entry_price": entry, "exit_price": exit_px,
         "entry_slippage_bps": (entry / float(ask0) - 1) * 1e4 if ask0 else None,  # type: ignore[arg-type]
         "exit_trigger_bid": qx.bid if qx else None,
-        "exit_slippage_bps": (exit_px / qx.bid - 1) * 1e4 if qx else None,
-        "spread_cost_usd": (half_entry + half_exit) * qty if half_entry is not None and half_exit is not None else None,
-        "spread_cost_r": (half_entry + half_exit) / risk if half_entry is not None and half_exit is not None else None,
-        "gross_usd": gross, "fees_usd": fees, "net_usd": net,
-        "realized_usd": net if t["exit_complete"] == "True" else None,
-        "marked_usd": None if t["exit_complete"] == "True" else net,
-        "r_multiple": float(t["r_multiple"]),
+        "exit_slippage_bps": (exit_px / qx.bid - 1) * 1e4 if qx and exit_px is not None else None,
+        # A round-trip spread cost exists only when the position was fully sold.
+        "spread_cost_usd": (half_entry + half_exit) * qty if complete and half_entry is not None and half_exit is not None
+        else None,
+        "spread_cost_r": (half_entry + half_exit) / risk if complete and half_entry is not None and half_exit is not None
+        else None,
+        "gross_usd": gross, "fees_usd": fees,
+        "net_usd": net if complete else None,
+        "realized_usd": realized,  # sold shares only, for complete and incomplete exits alike
+        "mark_price": None if complete else mark,
+        "marked_usd": None if complete else _f(t.get("unrealized_usd")) if mark is not None else None,
+        "r_multiple": r_mult if complete else None,
         "quote_files": ";".join(quote_files) if cached else "",
     }
     out.update(excursions(quotes if cached else [], entry, risk, t_fill, t_exit))
@@ -291,7 +302,8 @@ def summarize(signals: list[dict[str, object]], trades: list[dict[str, object]],
     def fq(key: str, rows: list[dict[str, object]] = trades) -> dict[str, float | None]:
         return _q([float(r[key]) for r in rows if r.get(key) is not None])  # type: ignore[arg-type]
 
-    stops = [t for t in trades if t["exit_reason"] == "stop"]
+    completed = [t for t in trades if t["r_multiple"] is not None]  # incomplete exits are reported, not scored
+    stops = [t for t in completed if t["exit_reason"] == "stop"]
     by_outcome = Counter(str(s["outcome"]) for s in signals)
     reasons = Counter((str(s["outcome"]), str(s["reason"])) for s in signals if s["outcome"] in ("skipped", "rejected", "unfilled"))
     evaluated = [s for s in signals if s["outcome"] != "skipped"]
@@ -303,7 +315,8 @@ def summarize(signals: list[dict[str, object]], trades: list[dict[str, object]],
         "quote_cache": {"evaluated_signals": len(evaluated),
                         "evaluated_with_cached_quotes": sum(1 for s in evaluated if s["quotes_cached"]),
                         "trades_with_cached_quotes": sum(1 for t in trades if t["quote_files"])},
-        "overall": stats([float(t["r_multiple"]) for t in trades]),  # type: ignore[arg-type]
+        "entries": len(trades), "completed_trades": len(completed),
+        "overall": stats([float(t["r_multiple"]) for t in completed]),  # type: ignore[arg-type]
         "pnl": {"realized_usd": sum(float(t["realized_usd"]) for t in trades if t["realized_usd"] is not None),  # type: ignore[arg-type]
                 "marked_usd": sum(float(t["marked_usd"]) for t in trades if t["marked_usd"] is not None),  # type: ignore[arg-type]
                 "gross_usd": sum(float(t["gross_usd"]) for t in trades),  # type: ignore[arg-type]
@@ -315,6 +328,8 @@ def summarize(signals: list[dict[str, object]], trades: list[dict[str, object]],
             "signal_quote_age_s_evaluated": fq("signal_quote_age_s", evaluated),
             "partial_fills": sum(1 for t in trades if t["fill"] == "partial"),
             "incomplete_exits": sum(1 for t in trades if not t["exit_complete"]),
+            "incomplete_exit_shares_unsold": sum(int(t["remaining_qty"]) for t in trades if not t["exit_complete"]),  # type: ignore[call-overload]
+            "incomplete_exits_unmarked": sum(1 for t in trades if not t["exit_complete"] and t["marked_usd"] is None),
             "exit_reasons": dict(Counter(str(t["exit_reason"]) for t in trades)),
         },
         "lifecycle": {
@@ -323,13 +338,13 @@ def summarize(signals: list[dict[str, object]], trades: list[dict[str, object]],
             "favorable_first_share": _share(trades, "favorable_first"),
             "forward_moves_r": {f"{k}m": fq(f"move_{k}m_r") for k in FORWARD_MINUTES},
             "stops": len(stops),
-            "stopped_after_1r_favorable": sum(1 for t in trades if t["stopped_after_1r_favorable"]),
-            "near_target_reversals": sum(1 for t in trades if t["near_target_reversal"]),
-            "fast_reversals_le_60s": sum(1 for t in trades if t["fast_reversal"]),
+            "stopped_after_1r_favorable": sum(1 for t in completed if t["stopped_after_1r_favorable"]),
+            "near_target_reversals": sum(1 for t in completed if t["near_target_reversal"]),
+            "fast_reversals_le_60s": sum(1 for t in completed if t["fast_reversal"]),
             "stops_mfe_r": fq("mfe_r", stops),
         },
-        "breakdowns_entry_time": {k: breakdown(trades, k, *BUCKETS[k]) for k in ENTRY_FEATURES},
-        "breakdowns_post_entry": {k: breakdown(trades, k, *BUCKETS[k]) for k in POST_ENTRY if k in BUCKETS},
+        "breakdowns_entry_time": {k: breakdown(completed, k, *BUCKETS[k]) for k in ENTRY_FEATURES},
+        "breakdowns_post_entry": {k: breakdown(completed, k, *BUCKETS[k]) for k in POST_ENTRY if k in BUCKETS},
         "min_bucket_n": MIN_BUCKET_N,
     }
 
@@ -383,7 +398,13 @@ def render_report(summary: Mapping[str, object]) -> str:
               f"| {o['n']} | {_fmt(o['win_rate'] and o['win_rate'] * 100, 1)}% | {_fmt(o['avg_r'], 3)} | {_fmt(o['median_r'], 3)} | "
               f"{_fmt(o['profit_factor'])} | {_ci(o['avg_r_ci95'])} |", ""]
     p = s["pnl"]
-    lines += [f"Realized P&L ${p['realized_usd']:,.2f}; marked (incomplete exits) ${p['marked_usd']:,.2f}; "
+    ex = s["execution"]
+    lines += [f"Entries {s['entries']}; completed trades {s['completed_trades']}; incomplete exits "
+              f"{ex['incomplete_exits']} ({ex['incomplete_exit_shares_unsold']} shares unsold, "
+              f"{ex['incomplete_exits_unmarked']} without a mark). R statistics, win rate, profit factor and the "
+              "breakdowns use completed trades only.", ""]
+    lines += [f"Realized P&L (shares sold) ${p['realized_usd']:,.2f}; marked unsold shares (incomplete exits, not realized) "
+              f"${p['marked_usd']:,.2f}; "
               f"gross ${p['gross_usd']:,.2f}; fees ${p['fees_usd']:,.2f}; half-spread cost paid ${p['spread_cost_usd']:,.2f}.", ""]
     lines += ["## Signal outcomes and reason codes", "", "| outcome | reason | n |", "|---|---|---:|"]
     lines += [f"| {r['outcome']} | {r['reason']} | {r['n']} |" for r in s["reason_codes"]]
@@ -489,9 +510,9 @@ function axis(el,x0,x1,y,lab){add(el,"line",{x1:x0,x2:x1,y1:y,y2:y,stroke:css("-
 const med=a=>{const v=a.filter(x=>x!==null).sort((p,q)=>p-q);return v.length?v[Math.floor((v.length-1)/2)]:null};
 const mean=a=>a.length?a.reduce((p,q)=>p+q,0)/a.length:null;
 function draw(){
- const T=filt(D.trades),R=T.map(t=>t.r_multiple),W=R.filter(r=>r>0),L=R.filter(r=>r<=0);
+ const A=filt(D.trades),T=A.filter(t=>t.r_multiple!==null),I=A.filter(t=>t.r_multiple===null),R=T.map(t=>t.r_multiple),W=R.filter(r=>r>0),L=R.filter(r=>r<=0);
  const pf=L.length&&L.reduce((a,b)=>a+b,0)<0?W.reduce((a,b)=>a+b,0)/-L.reduce((a,b)=>a+b,0):null;
- const k=[["trades",T.length],["win rate",R.length?(100*W.length/R.length).toFixed(1)+"%":"—"],["avg R",R.length?mean(R).toFixed(3):"—"],["median R",R.length?med(R).toFixed(3):"—"],["profit factor",pf?pf.toFixed(2):"—"],["net USD",T.reduce((a,t)=>a+t.net_usd,0).toFixed(2)],["small sample",T.length<30?"yes":"no"]];
+ const k=[["entries",A.length],["completed",T.length],["incomplete exits",I.length+(I.length?` (marked ${I.reduce((a,t)=>a+(t.marked_usd||0),0).toFixed(2)}${I.some(t=>t.marked_usd===null)?", some unmarked":""})`:"")],["win rate",R.length?(100*W.length/R.length).toFixed(1)+"%":"—"],["avg R",R.length?mean(R).toFixed(3):"—"],["median R",R.length?med(R).toFixed(3):"—"],["profit factor",pf?pf.toFixed(2):"—"],["net USD (completed)",T.reduce((a,t)=>a+t.net_usd,0).toFixed(2)],["small sample",T.length<30?"yes":"no"]];
  $("kpi").innerHTML=k.map(([a,b])=>`<div>${a}<b>${b}</b></div>`).join("");
  // histogram
  let el=svg($("hist"),360,220);const bins=[];for(let b=-1.5;b<2.5;b+=0.25)bins.push([b,0]);R.forEach(r=>{let i=Math.min(bins.length-1,Math.max(0,Math.floor((r+1.5)/0.25)));bins[i][1]++});
@@ -524,7 +545,7 @@ def write_dashboard(path: Path, signals: list[dict[str, object]], trades: list[d
     """Standalone HTML (no external requests). Embeds per-trade rows: local only, never commit or publish."""
     keep_s = ("session", "hour_et", "outcome", "reason")
     keep_t = ("session", "hour_et", "price", "change_pct", "volume_ratio", "breakout_strength_bps", "signal_spread_bps",
-              "seconds_to_fill", "fill", "exit_reason", "r_multiple", "net_usd", "mfe_r", "mae_r",
+              "seconds_to_fill", "fill", "exit_reason", "r_multiple", "net_usd", "marked_usd", "mfe_r", "mae_r",
               *(f"move_{k}m_r" for k in FORWARD_MINUTES))
     data = {"sample": sample, "scenario": scenario,
             "signals": [{k: s.get(k) for k in keep_s} for s in signals],
