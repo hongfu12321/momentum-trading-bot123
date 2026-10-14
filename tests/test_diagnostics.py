@@ -141,17 +141,17 @@ def test_report_and_dashboard_are_self_contained(tmp_path) -> None:  # noqa: ANN
     assert "<script src" not in html and "http" not in html.replace("http://www.w3.org/2000/svg", "")
 
 
-def test_engine_to_dashboard_reconciliation_with_an_incomplete_exit(tmp_path) -> None:  # noqa: ANN001
-    """End to end on the corrected PR #4 engine: backtest summary, trade ledger, diagnostics aggregates and the
-    dashboard's embedded rows must agree, with the incomplete exit kept out of net P&L and R."""
+def _scripted_run(tmp_path):  # noqa: ANN001, ANN202
+    """A tiny dataset plus a real run of the corrected PR #4 engine, written the way m1-dataset and m2-backtest
+    write it: one stop exit (A) and one exit that sells nothing (B)."""
     import csv
     import json
-    import math
-    import re
 
     from conftest import et
 
-    from momentum_bot.backtest import run_backtest, signals_from_breakouts, summarize, with_spread_caps, write_rows
+    from momentum_bot.backtest import (
+        RiskConfig, config_record, run_backtest, signals_from_breakouts, summarize, with_spread_caps, write_rows,
+    )
 
     d1, d2 = datetime(2024, 3, 8).date(), datetime(2024, 3, 11).date()
     a0, b0 = et(d1, "05:01"), et(d2, "05:01")  # signal availability (bar 05:00 completed)
@@ -173,14 +173,31 @@ def test_engine_to_dashboard_reconciliation_with_an_incomplete_exit(tmp_path) ->
         w = csv.DictWriter(fh, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
+    (tmp_path / "manifest.json").write_text(json.dumps({"created_at_utc": "2024-03-12T00:00:00+00:00", "code_sha": "test",
+                                                        "inputs": {"nasdaqlisted_sha256": "ab" * 32}}), encoding="utf-8")
     (cfg,) = with_spread_caps([dg.SCENARIOS["base"]], [50])
     res = run_backtest(signals_from_breakouts(rows, {"in_sample"}), QuoteStore(Scripted(), tmp_path / "cache" / "backtest_quotes"), cfg)  # type: ignore[arg-type]
     bt = tmp_path / "backtest" / "in_sample" / "base_cap50"
     write_rows(bt / "trades.csv", res.trades)
     write_rows(bt / "attempts.csv", res.attempts)
-    engine = summarize(res)["all"]
+    summary = {"sample": "in_sample", "code_sha": "run1", "created_at_utc": "2024-03-12T01:00:00+00:00", "signals": 2,
+               "config": config_record(StrategyConfig(), RiskConfig(), [cfg]), "results": {cfg.name: summarize(res)}}
+    (tmp_path / "backtest_summary_in_sample.json").write_text(json.dumps(summary, default=str), encoding="utf-8")
+    return res, summarize(res)["all"]
+
+
+def test_engine_to_dashboard_reconciliation_with_an_incomplete_exit(tmp_path) -> None:  # noqa: ANN001
+    """End to end on the corrected PR #4 engine: backtest summary, trade ledger, diagnostics aggregates and the
+    dashboard's embedded rows must agree, with the incomplete exit kept out of net P&L and R."""
+    import csv
+    import json
+    import math
+    import re
+
+    res, engine = _scripted_run(tmp_path)
     done, open_ = (next(t for t in res.trades if t.symbol == s) for s in ("A", "B"))
     assert done.exit_complete and not open_.exit_complete and open_.exit_qty == 0 and open_.net_usd is None
+    assert dg.validate_inputs(tmp_path, "in_sample", "base_cap50")["backtest_run"]["ledgers_reproduce_summary"]
 
     s = dg.run(tmp_path, "in_sample", "base_cap50")  # cache only from here on
     ledger = list(csv.DictReader((tmp_path / "diagnostics" / "in_sample" / "base_cap50" / "trade_ledger.csv").open(encoding="utf-8")))
@@ -201,3 +218,83 @@ def test_engine_to_dashboard_reconciliation_with_an_incomplete_exit(tmp_path) ->
     assert sum(t["net_usd"] for t in completed) == pytest.approx(engine["net_usd"])
     assert [t["marked_usd"] for t in data["trades"] if t["r_multiple"] is None] == [pytest.approx(s["pnl"]["marked_usd"])]
     assert not any(isinstance(v, float) and math.isnan(v) for t in data["trades"] for v in t.values())
+
+
+def _edit_csv(path, fn) -> None:  # noqa: ANN001
+    import csv
+
+    with path.open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    rows, header = fn(rows)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=header, lineterminator="\n")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def test_validation_records_provenance(tmp_path) -> None:  # noqa: ANN001
+    _scripted_run(tmp_path)
+    pv = dg.validate_inputs(tmp_path, "in_sample", "base_cap50")
+    assert pv["backtest_run"]["code_sha"] == "run1" and pv["backtest_run"]["trades_rows"] == 2
+    assert pv["backtest_run"]["trades_sha256"] == dg.sha256_of(tmp_path / "backtest/in_sample/base_cap50/trades.csv")
+    assert pv["dataset"]["input_sha256"] == {"nasdaqlisted_sha256": "ab" * 32}
+    assert pv["configuration"]["scenario"]["spread_cap_bps"] == 50.0
+    assert pv["current_code_fields_not_recorded_by_backtest_run"] == []
+    s = {"sample": "in_sample", "scenario": "base_cap50", "signals": 2, "trades": 2, "min_bucket_n": 30, "code_sha": "gen1",
+         "provenance": pv, **{k: v for k, v in dg.summarize([], [], "in_sample", "base_cap50").items()
+                               if k not in ("signals", "trades")}}
+    text = dg.render_report(s)
+    assert "Generated by code** `gen1`" in text and "can be older than the repository HEAD" in text
+    assert "from code `run1`" in text
+
+
+@pytest.mark.parametrize(("break_it", "message"), [
+    (lambda p: (p / "backtest_summary_in_sample.json").unlink(), "missing required inputs"),
+    (lambda p: _edit_csv(p / "backtest/in_sample/base_cap50/trades.csv",
+                         lambda r: ([{**x, "realized_net_usd": "1.0"} for x in r], list(r[0]))), "do not reproduce"),
+    (lambda p: _edit_csv(p / "backtest/in_sample/base_cap50/trades.csv",  # a pre-fix ledger without exit_qty
+                         lambda r: ([{k: v for k, v in x.items() if k != "exit_qty"} for x in r],
+                                    [k for k in r[0] if k != "exit_qty"])), "columns do not match the current execution model"),
+    (lambda p: _edit_csv(p / "backtest/in_sample/base_cap50/attempts.csv",
+                         lambda r: ([{**x, "scenario": "stress_cap50"} for x in r[:1]] + r[1:], list(r[0]))),
+     "rows from other runs"),
+    (lambda p: _edit_csv(p / "backtest/in_sample/base_cap50/trades.csv", lambda r: (r[:1], list(r[0]))),
+     "do not pair one to one"),
+    (lambda p: _edit_csv(p / "breakout_matches.csv", lambda r: (r[:1], list(r[0]))), "the dataset changed"),
+])
+def test_validation_rejects_stale_or_mixed_inputs(tmp_path, break_it, message) -> None:  # noqa: ANN001
+    _scripted_run(tmp_path)
+    break_it(tmp_path)
+    with pytest.raises(dg.InputMismatch, match=message):
+        dg.validate_inputs(tmp_path, "in_sample", "base_cap50")
+
+
+def test_validation_rejects_a_configuration_change(tmp_path) -> None:  # noqa: ANN001
+    _scripted_run(tmp_path)
+    with pytest.raises(dg.InputMismatch, match="strategy.stop_pct: backtest run used 0.03, current code has 0.04"):
+        dg.validate_inputs(tmp_path, "in_sample", "base_cap50", StrategyConfig(stop_pct=0.04))
+    import shutil
+
+    shutil.copytree(tmp_path / "backtest/in_sample/base_cap50", tmp_path / "backtest/in_sample/base_cap100")
+    with pytest.raises(dg.InputMismatch, match="no scenario 'base_cap100'"):  # ledgers from a run the summary lacks
+        dg.validate_inputs(tmp_path, "in_sample", "base_cap100")
+
+
+def test_missing_quotes_stay_optional(tmp_path) -> None:  # noqa: ANN001
+    import shutil
+
+    _scripted_run(tmp_path)
+    shutil.rmtree(tmp_path / "cache" / "backtest_quotes")
+    dg.validate_inputs(tmp_path, "in_sample", "base_cap50")  # quotes are not a required input
+    s = dg.run(tmp_path, "in_sample", "base_cap50")
+    assert s["quote_cache"]["evaluated_with_cached_quotes"] == 0 and s["lifecycle"]["mfe_r"]["n"] == 0  # empty, not invented
+
+
+def test_cli_refuses_inconsistent_inputs(tmp_path, capsys) -> None:  # noqa: ANN001
+    from momentum_bot import cli
+
+    _scripted_run(tmp_path)
+    _edit_csv(tmp_path / "backtest/in_sample/base_cap50/trades.csv", lambda r: (r[:1], list(r[0])))
+    assert cli.main(["m2-diagnostics", "--dataset", str(tmp_path)]) == cli.EXIT_USAGE
+    assert "do not pair one to one" in capsys.readouterr().err
+    assert not (tmp_path / "diagnostics_in_sample_base_cap50.json").exists()  # nothing written from bad inputs

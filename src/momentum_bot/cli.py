@@ -223,11 +223,13 @@ def _diagnostics(args: argparse.Namespace) -> int:
     if args.sample == "out_of_sample" and not args.confirm_out_of_sample:
         print("error: out-of-sample diagnostics need --confirm-out-of-sample (report only; no tuning)", file=sys.stderr)
         return EXIT_USAGE
-    if not (dataset / "backtest" / args.sample / args.scenario / "trades.csv").is_file():
-        print(f"error: no backtest output for {args.sample}/{args.scenario}; run m2-backtest first", file=sys.stderr)
+    try:  # refuse stale, edited or mismatched inputs before producing any report
+        provenance = diagnostics.validate_inputs(dataset, args.sample, args.scenario)
+    except diagnostics.InputMismatch as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
-    summary = {"dataset": str(dataset), "code_sha": code_version(), "orders_placed": 0, "network_requests": 0,
-               "created_at_utc": datetime.now(timezone.utc).isoformat(),
+    summary = {"dataset": dataset.as_posix(), "code_sha": code_version(), "orders_placed": 0, "network_requests": 0,
+               "created_at_utc": datetime.now(timezone.utc).isoformat(), "provenance": provenance,
                **diagnostics.run(dataset, args.sample, args.scenario)}
     stem = f"diagnostics_{args.sample}_{args.scenario}"
     (dataset / f"{stem}.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
