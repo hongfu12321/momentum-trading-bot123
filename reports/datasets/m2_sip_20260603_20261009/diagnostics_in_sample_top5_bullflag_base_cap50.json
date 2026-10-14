@@ -1,21 +1,21 @@
 {
   "dataset": "reports\\datasets\\m2_sip_20260603_20261009",
-  "code_sha": "f6aa8cc",
+  "code_sha": "c57c967",
   "orders_placed": 0,
   "network_requests": 0,
-  "created_at_utc": "2026-10-14T04:36:43.498227+00:00",
+  "created_at_utc": "2026-10-14T16:48:59.931629+00:00",
   "provenance_variant": {
     "dataset": {
       "path": "reports/datasets/m2_sip_20260603_20261009",
-      "manifest_sha256": "640cc64ac20713d3fc637f2537aec0f7153366989ebd5503c3b250130fbcce71",
+      "manifest_sha256": "9d13bfc8dd6416e99a56c8eb01330668a20e14b7a7e0941d34bdda5391c6d460",
       "manifest_created_at_utc": "2026-10-13T21:37:11.148580+00:00",
       "breakout_matches_sha256": "ce2b985b303e20af1c0d379801a3f7000826f19f629d9cfc4a49cae43129fdb2",
-      "references_sha256": "c76b5e85802c44b1f881c625dd2c0ad59d1cf5d653f4cb5024ea16fa0ee099b7"
+      "references_sha256": "eb7e980371c75bd52d0a13c99f16ee283c576b4ddd732ac536a36f6ddf852519"
     },
     "backtest_run": {
       "source": "m2-research, same invocation",
       "baseline_reproduced_pr4_ledgers": true,
-      "signals_sha256": "398a07983deb698870cb6ebfeea833d529e0274568a20730ca4c70c56cf291e6",
+      "signals_sha256": "7d1a3e54015c55aaf4f88e346f8dd162fc64adb04a49266888bb080ef6f35c6f",
       "trades_sha256": "9e84415d37952db31c85ff9be5fe50983f3eb8bb3a10fd7595094ffaab6f16dc",
       "attempts_sha256": "1be466a87fdd6371894ac8a13a59f0d5071ec80b3b0f5d304ad094c0841a32da"
     },
