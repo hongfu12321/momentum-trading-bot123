@@ -60,15 +60,16 @@ To replay a case, open the files named in `quote_files` under `cache/backtest_qu
 | `exit_reason` | execution | `stop` (bid ≤ entry × 0.97), `target` (bid ≥ entry × 1.06), `time` (15 minutes after entry) or `session_end` (2 minutes before close). |
 | `exit_trigger_utc`, `exit_last_fill_utc` | execution | When the exit was decided, and when its last share was sold. |
 | `exit_trigger_bid` | execution | Bid of the executable quote prevailing at the exit trigger. |
-| `exit_price` | execution | Volume-weighted sell price, including any marked remainder. |
+| `exit_qty`, `remaining_qty` | execution | Shares actually sold, and shares still held when the 2-minute exit window ended (incomplete exit). |
+| `exit_price` | execution | Volume-weighted price of the shares actually sold. Empty when nothing sold. |
 | `exit_slippage_bps` | execution | (exit price / exit trigger bid − 1) × 10,000. Negative means sold below the bid seen at the trigger. |
 | `holding_seconds` | execution | Last exit fill − first entry fill. |
-| `spread_cost_usd` | cost | (half the spread of the signal-time quote + half the spread of the exit-trigger quote) × shares. This is the spread paid versus mid-price fills. |
+| `spread_cost_usd` | cost | (half the spread of the signal-time quote + half the spread of the exit-trigger quote) × shares. This is the spread paid versus mid-price fills. Completed exits only; empty for incomplete exits. |
 | `spread_cost_r` | cost | The same cost per share, divided by the planned risk per share (entry × 3%). |
-| `gross_usd`, `fees_usd`, `net_usd` | P&L | Proceeds − cost; SEC and FINRA TAF fees; gross − fees. |
-| `realized_usd` | P&L | `net_usd` when the exit completed, else empty. |
-| `marked_usd` | P&L | `net_usd` of an incomplete exit, whose remainder was marked at the last executable bid. These are kept apart from realized P&L. |
-| `r_multiple` | P&L | `net_usd` / (entry price × 3% × filled shares). |
+| `gross_usd`, `fees_usd`, `net_usd` | P&L | Realized proceeds − entry cost of the shares sold; SEC and FINRA TAF fees on them; `net_usd` = gross − fees for completed exits only, empty for incomplete exits. |
+| `realized_usd` | P&L | Realized net P&L of the shares actually sold (equals `net_usd` for completed exits). |
+| `mark_price`, `marked_usd` | P&L | Incomplete exits only: last executable bid at or before the exit window end, and (mark − entry) × unsold shares. Never realized and never in R statistics. Empty when no bid existed (unmarked), never shown as zero. |
+| `r_multiple` | P&L | `net_usd` / (entry price × 3% × filled shares). Completed exits only; empty for incomplete exits. |
 | `mfe_r`, `mae_r` | post-entry | Maximum favourable and adverse excursion: the max and min of (bid − entry price) / risk per share over executable quotes from the first entry fill to the exit trigger. Bid-based, so the entry spread is already included at t = 0. |
 | `seconds_to_mfe`, `seconds_to_mae` | post-entry | Seconds from the first entry fill to the first time the MFE (or MAE) was reached. |
 | `favorable_first` | post-entry | True if the bid reached +0.5R before −0.5R, False if −0.5R came first, empty if neither happened. |
@@ -83,7 +84,8 @@ To replay a case, open the files named in `quote_files` under `cache/backtest_qu
 | metric | definition |
 |---|---|
 | `n` | Trades in the group. |
-| win rate | Share of trades with `r_multiple` > 0. |
+| entries, completed trades | Filled entries, and those whose exit sold every share. Incomplete exits are counted as entries and reported separately (count, shares unsold, mark). |
+| win rate | Share of completed trades with `r_multiple` > 0. R statistics, profit factor, breakdowns and lifecycle flags use completed trades only. |
 | avg R, median R | Mean and median of `r_multiple`. |
 | profit factor | Sum of positive R / −sum of non-positive R. This is R-based, so it can differ slightly from the USD-based figure in the backtest summary. It is empty when there are no losses. |
 | 95% CI avg R | Bootstrap percentile interval of the mean R (2,000 resamples, seed 0). It is only a rough guide for small groups. |

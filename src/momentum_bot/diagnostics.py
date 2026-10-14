@@ -501,7 +501,7 @@ const EDGES={price:[1,2,5,10,20],change_pct:[5,10,20,50,100],volume_ratio:[2,3,5
 const $=id=>document.getElementById(id);
 DIMS.forEach(d=>$("dim").add(new Option(d,d)));
 for(let h=4;h<20;h++)$("hour").add(new Option(h,h));
-$("sub").textContent=`${D.sample} · ${D.scenario} · ${D.trades.length} trades · ${D.signals.length} signals · simulation only, no orders. Small groups are noisy; patterns are hypotheses.`;
+$("sub").textContent=`${D.sample} · ${D.scenario} · ${D.trades.length} entries · ${D.signals.length} signals · simulation only, no orders. Small groups are noisy; patterns are hypotheses.`;
 function bucket(v,e){if(v===null||v===undefined||v==="")return"unknown";if(!e)return String(v);if(v<e[0])return"<"+e[0];for(let i=0;i<e.length-1;i++)if(v<e[i+1])return e[i]+"–"+e[i+1];return">="+e[e.length-1]}
 function filt(rows){const s=$("session").value,x=$("exit").value,h=$("hour").value;return rows.filter(r=>(!s||r.session===s)&&(!x||r.exit_reason===x)&&(!h||String(r.hour_et)===h))}
 function svg(el,w,h){el.setAttribute("viewBox",`0 0 ${w} ${h}`);el.innerHTML="";return el}
