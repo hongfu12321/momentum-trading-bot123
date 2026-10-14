@@ -1,8 +1,8 @@
 {
-  "dataset": "reports\\datasets\\m2_sip_20260603_20261009",
-  "code_sha": "75ea4b3",
-  "created_at_utc": "2026-10-14T14:59:22.363995+00:00",
-  "quote_api_requests": 285,
+  "dataset": "reports/datasets/m2_sip_20260603_20261009",
+  "code_sha": "9174d2c",
+  "created_at_utc": "2026-10-14T16:22:33.464480+00:00",
+  "quote_api_requests": 0,
   "sample": "in_sample",
   "scenario": "base_cap50",
   "orders_placed": 0,
@@ -22,6 +22,32 @@
     "mean_distinct_members_per_session": 25.26271186440678,
     "max_staleness_minutes": 5,
     "stale_exclusion_symbol_minutes": 737692
+  },
+  "bull_flag": {
+    "params": {
+      "pole_min_gain": 0.05,
+      "pole_min_bars": 3,
+      "pole_max_bars": 10,
+      "flag_min_bars": 2,
+      "flag_max_bars": 8,
+      "max_pullback": 0.5,
+      "breakout_volume_multiple": 1.5,
+      "exclude_closing_auction_bar": true
+    },
+    "attempts_evaluated": 126651,
+    "qualified": 1435,
+    "qualified_in_top5_and_gated": 875,
+    "first_failed_rule": {
+      "failed_flagpole": 57893,
+      "failed_complete_bars": 48562,
+      "failed_pullback": 7938,
+      "failed_consolidation": 5024,
+      "insufficient_history": 3790,
+      "qualified": 1435,
+      "failed_breakout_close": 1053,
+      "failed_breakout_volume": 613,
+      "failed_volume_contraction": 343
+    }
   },
   "strategies": {
     "hos": {
@@ -344,6 +370,37 @@
             "unmarked": 0
           }
         }
+      }
+    },
+    "top5_bullflag": {
+      "label": "Top 5 (cached universe) + Bull Flag Breakout",
+      "signals_to_backtest": 875,
+      "filtered_before_backtest": {
+        "failed_consolidation": 3598,
+        "failed_pullback": 4977,
+        "failed_flagpole": 22040,
+        "failed_complete_bars": 4961,
+        "failed_volume_contraction": 195,
+        "insufficient_history": 817,
+        "failed_breakout_volume": 302,
+        "failed_breakout_close": 564,
+        "not_in_top5": 547,
+        "candidate_gate_failed": 13
+      },
+      "blocked_missing_quotes": {
+        "signals": 875,
+        "both_windows_cached": 25,
+        "missing": 850
+      }
+    },
+    "bullflag": {
+      "label": "Bull Flag Breakout (no Top 5 filter)",
+      "signals_to_backtest": 1140,
+      "filtered_before_backtest": {},
+      "blocked_missing_quotes": {
+        "signals": 1140,
+        "both_windows_cached": 28,
+        "missing": 1112
       }
     }
   },
