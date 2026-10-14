@@ -354,8 +354,23 @@ def test_restored_dataset_still_passes_the_viewer_hashing(env) -> None:  # noqa:
     shutil.rmtree(tmp / "dest")
 
 
-def test_missing_rclone_is_a_clear_error(capsys) -> None:  # noqa: ANN001
+def test_missing_rclone_is_a_clear_error(capsys, monkeypatch) -> None:  # noqa: ANN001
     r = bk.RcloneTransport(binary="rclone-does-not-exist-here")
     with pytest.raises(bk.BackupError, match="not found; install it"):
         r.list_dirs("gdrive:trading-research")
-    assert cli.main(["dataset-list", "--remote", "gdrive:trading-research"]) in (cli.EXIT_OK, cli.EXIT_PARTIAL)
+    # The CLI path, with a binary that cannot exist: never the real rclone, never the network.
+    monkeypatch.setattr(bk, "transport_for", lambda remote: bk.RcloneTransport(binary="rclone-does-not-exist-here"))
+    assert cli.main(["dataset-list", "--remote", "gdrive:trading-research"]) == cli.EXIT_PARTIAL
+    assert "not found; install it" in capsys.readouterr().err
+
+
+@pytest.fixture(autouse=True)
+def _no_real_rclone(monkeypatch):  # noqa: ANN001, ANN202
+    """Guard: no test may start the real rclone (it would reach Google Drive)."""
+    real = bk.subprocess.run
+
+    def guarded(cmd, *a, **k):  # noqa: ANN001, ANN002, ANN003, ANN202
+        if cmd and Path(str(cmd[0])).name == "rclone":
+            raise AssertionError(f"a test tried to run the real rclone: {cmd[:2]}")
+        return real(cmd, *a, **k)
+    monkeypatch.setattr(bk.subprocess, "run", guarded)
