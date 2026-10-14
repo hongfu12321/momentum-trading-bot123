@@ -189,7 +189,11 @@ class RcloneTransport:
     def _call(self, *args: str) -> str:
         if args[0] in FORBIDDEN_RCLONE or args[0] not in ("copy", "copyto", "lsf", "lsjson"):
             raise BackupError(f"refusing rclone {args[0]}: only copy-only commands are allowed")
-        res = self.run([self.binary, *args])
+        try:
+            res = self.run([self.binary, *args])
+        except FileNotFoundError:
+            raise BackupError(f"{self.binary} not found; install it (macOS: brew install rclone) and configure the "
+                              "remote, see docs/dataset_backup_restore.md") from None
         if res.returncode != 0:
             raise BackupError(f"rclone {args[0]} failed (exit {res.returncode}): {res.stderr.strip()[-500:]}")
         return res.stdout

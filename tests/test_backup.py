@@ -352,3 +352,10 @@ def test_restored_dataset_still_passes_the_viewer_hashing(env) -> None:  # noqa:
     for rel in FILES:
         assert sha256_of(tmp / "dest" / rel) == sha256_of(ds / rel)
     shutil.rmtree(tmp / "dest")
+
+
+def test_missing_rclone_is_a_clear_error(capsys) -> None:  # noqa: ANN001
+    r = bk.RcloneTransport(binary="rclone-does-not-exist-here")
+    with pytest.raises(bk.BackupError, match="not found; install it"):
+        r.list_dirs("gdrive:trading-research")
+    assert cli.main(["dataset-list", "--remote", "gdrive:trading-research"]) in (cli.EXIT_OK, cli.EXIT_PARTIAL)
