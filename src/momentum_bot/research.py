@@ -10,6 +10,11 @@ Point-in-time rules:
 - A symbol's price is its last completed-bar close. Its change is measured against the reference
   close the dataset already used (previous official close for premarket, same day's official
   close after hours, split-adjusted on ex-dates).
+- Freshness: missing SIP bars are never filled. A minute without a bar means no trades were
+  reported, so the symbol keeps its last close only while that close is at most
+  ``max_staleness_minutes`` old; after that it is dropped from the ranking (``stale``) until it
+  trades again. Every snapshot row records the age of its price, and every session counts the
+  exclusions. The limit is a fixed policy chosen before any result was looked at, not a tuned value.
 
 Coverage limit: the dataset fetched bars only for symbols whose reference close was low enough to
 reach the scanner's price band (about $18.2 premarket, $19.0 after hours). The ranking is therefore
@@ -43,6 +48,7 @@ STRATEGIES = ("hos", "top5_hos")
 # "Top 5" is ranked within the dataset's cached sub-$20 universe, never the market-wide gainers list.
 STRATEGY_LABELS = {"hos": "Original HOS Breakout", "top5_hos": "Top 5 (cached universe) HOS Breakout"}
 SCENARIO = "base_cap50"  # the frozen configuration from reports/m2_backtest.md
+UNIVERSE = "cached_eligible_sub20"  # recorded on every ranking row: never the market-wide top-gainers list
 
 
 # ---------- point-in-time Top 5 ----------
@@ -54,10 +60,14 @@ class RankParams:
     max_price: float = 20.0
     min_session_volume: int = 100_000
     exclude_closing_auction_bar: bool = True
+    max_staleness_minutes: int = 5  # a price older than this is stale and never ranked
 
     @classmethod
     def from_scan(cls, p: ScanParams, size: int = 5) -> RankParams:
         return cls(size, p.min_price, p.max_price, p.min_session_volume, p.exclude_closing_auction_bar)
+
+    def is_fresh(self, last_bar: datetime, t: datetime) -> bool:
+        return (t - last_bar) / BAR_LENGTH <= self.max_staleness_minutes
 
 
 @dataclass(slots=True)
@@ -88,7 +98,7 @@ def rank_session(window: SessionWindow, bars_by_symbol: Mapping[str, list[Bar]],
     changes: list[dict[str, object]] = []
     prev: dict[str, int] = {}
     members: set[str] = set()
-    no_bar = short = 0
+    no_bar = short = stale_total = 0
     t = window.start_utc
     base = {"trading_date": window.trading_date.isoformat(), "session": window.name}
     while t < window.end_utc:
@@ -100,7 +110,9 @@ def rank_session(window: SessionWindow, bars_by_symbol: Mapping[str, list[Bar]],
                 vol[b.symbol] += b.volume
             if vol[b.symbol] >= params.min_session_volume:
                 volume_ok.add(b.symbol)
-        ranked = sorted(((last[s][0] / refs[s] - 1, s) for s in volume_ok
+        fresh = {s for s in volume_ok if params.is_fresh(last[s][1], t)}
+        stale_total += len(volume_ok) - len(fresh)
+        ranked = sorted(((last[s][0] / refs[s] - 1, s) for s in fresh
                          if params.min_price <= last[s][0] <= params.max_price), key=lambda x: (-x[0], x[1]))
         top = ranked[: params.size]
         short += len(top) < params.size
@@ -109,14 +121,16 @@ def rank_session(window: SessionWindow, bars_by_symbol: Mapping[str, list[Bar]],
         for i, (chg, s) in enumerate(top):
             snaps.append({**base, **at, "rank": i + 1, "symbol": s, "change_pct": chg * 100, "price": last[s][0],
                           "session_volume": vol[s], "minutes_since_trade": int((t - last[s][1]) / BAR_LENGTH),
-                          "ranked_symbols": len(ranked)})
+                          "ranked_symbols": len(ranked), "stale_excluded": len(volume_ok) - len(fresh),
+                          "universe": UNIVERSE})
         change_of = {s: c * 100 for c, s in top}
         for s in sorted(cur.keys() - prev.keys()):
             changes.append({**base, **at, "symbol": s, "event": "enter", "rank": cur[s], "prev_rank": None,
                             "change_pct": change_of[s]})
         for s in sorted(prev.keys() - cur.keys()):
             price = last[s][0]
-            why = "left_price_band" if not params.min_price <= price <= params.max_price else "displaced"
+            why = ("stale" if s not in fresh else
+                   "left_price_band" if not params.min_price <= price <= params.max_price else "displaced")
             changes.append({**base, **at, "symbol": s, "event": "exit", "rank": None, "prev_rank": prev[s],
                             "change_pct": (price / refs[s] - 1) * 100, "reason": why})
         for s in sorted(cur.keys() & prev.keys()):
@@ -129,7 +143,8 @@ def rank_session(window: SessionWindow, bars_by_symbol: Mapping[str, list[Bar]],
     coverage = {**base, "minutes": window.minutes, "eligible_symbols": sum(1 for v in refs.values() if v > 0),
                 "symbols_with_bars": len(last), "minutes_without_any_bar": no_bar,
                 f"minutes_with_fewer_than_{params.size}_ranked": short, "distinct_top_members": len(members),
-                "bars_file": "found"}
+                "stale_exclusion_symbol_minutes": stale_total, "max_staleness_minutes": params.max_staleness_minutes,
+                "universe": UNIVERSE, "bars_file": "found"}
     return Ranking(snaps, changes, coverage)
 
 
@@ -357,6 +372,7 @@ def compare(dataset: Path, results: Mapping[str, BacktestResult], sample: str = 
         "sessions": {"total": len(coverage), "with_bars": len(found),
                      "missing_bars": [f"{r['trading_date']} {r['session']}" for r in coverage if r["bars_file"] != "found"]},
         "top5": {
+            "universe": UNIVERSE,
             "universe_limit": "Ranked universe = symbols the dataset fetched bars for (reference close below about "
                               "$18.2 premarket / $19.0 after hours), filtered to the $1-$20 scan band and 100k session "
                               "volume. Symbols outside it are absent, so this is not the market-wide top-gainers list.",
@@ -365,6 +381,8 @@ def compare(dataset: Path, results: Mapping[str, BacktestResult], sample: str = 
             "minutes": sum(int(r["minutes"]) for r in found),
             "minutes_with_fewer_than_5_ranked": sum(int(r[short_key]) for r in found) if short_key else None,
             "mean_distinct_members_per_session": fmean(int(r["distinct_top_members"]) for r in found) if found else None,
+            "max_staleness_minutes": RankParams().max_staleness_minutes,
+            "stale_exclusion_symbol_minutes": sum(int(r["stale_exclusion_symbol_minutes"]) for r in found),
         },
         "strategies": strategies,
         "execution_consistency": _consistency(results),
@@ -407,6 +425,8 @@ def render_comparison(c: Mapping[str, object]) -> str:
     t5: Mapping[str, object] = c["top5"]  # type: ignore[assignment]
     ses: Mapping[str, object] = c["sessions"]  # type: ignore[assignment]
     L = [f"# Strategy comparison: {c['sample']}, {c['scenario']} (generated)", "",
+         "\"Top 5\" is ranked within the dataset's cached eligible sub-$20 universe, not the market-wide "
+         "top-gainers list.", "",
          f"Status: **{c['status']}**. Simulated fills against cached historical SIP quotes; 0 orders. "
          "Every variant uses the unchanged execution model, risk limits and frozen 50 bps cap.", "",
          f"Sessions: {ses['with_bars']} of {ses['total']} with cached bars "
@@ -440,8 +460,10 @@ def render_comparison(c: Mapping[str, object]) -> str:
           f"Mean eligible symbols per session {_f(t5['mean_eligible_symbols'], 0)}, with at least one bar "
           f"{_f(t5['mean_symbols_with_bars'], 0)}. Minutes with fewer than 5 ranked symbols: "
           f"{t5['minutes_with_fewer_than_5_ranked']} of {t5['minutes']}. Mean distinct Top 5 members per session: "
-          f"{_f(t5['mean_distinct_members_per_session'], 1)}.", ""]
-    L[3:3] = ["Win rate, average R, net P&L and profit factor use completed trades only. Incomplete exits (unsold "
+          f"{_f(t5['mean_distinct_members_per_session'], 1)}.", "",
+          f"Freshness: missing bars are never filled; a price older than {t5['max_staleness_minutes']} minutes is "
+          f"stale and not ranked ({t5['stale_exclusion_symbol_minutes']} symbol-minutes excluded).", ""]
+    L[5:5] = ["Win rate, average R, net P&L and profit factor use completed trades only. Incomplete exits (unsold "
               "shares when the 2-minute exit window ended) are counted as entries and reported apart, never as P&L.", ""]
     return "\n".join(L) + "\n"
 

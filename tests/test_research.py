@@ -58,7 +58,7 @@ def test_top5_ranking_uses_only_completed_bars_and_records_changes() -> None:
     assert ev[("B", "exit", "09:02")]["reason"] == "left_price_band"
     assert ev[("E", "enter", "09:02")]["rank"] == 5
     assert ("A", "rank_change", "09:01") in ev
-    assert rank.coverage["minutes_with_fewer_than_5_ranked"] == 0
+    assert rank.coverage["minutes_with_fewer_than_5_ranked"] == pm.minutes - 6  # from 04:06 the 04:00 closes are stale
     assert rank.coverage["minutes_without_any_bar"] == pm.minutes - 4
 
 
@@ -67,6 +67,22 @@ def test_top5_excludes_after_hours_closing_auction_volume() -> None:
     bars = {"X": [flat("X", "16:00", 2.0, 5_000_000), flat("X", "16:01", 2.0, 150_000)]}
     rank = rs.rank_session(ah, bars, {"X": 1.0})
     assert [r["bar_start_utc"][11:16] for r in rank.snapshots][0] == "21:01"  # auction volume ignored at 16:00
+
+
+def test_top5_never_ranks_stale_prices() -> None:
+    pm = W["premarket"]
+    bars = {s: [flat(s, "04:00", 3.0, 200_000)] for s in "ABCDE"}  # +200%, then no more trades
+    bars["LIVE"] = [flat("LIVE", f"04:{m:02d}", 1.1, 200_000) for m in range(10)]  # +10%, trades every minute
+    rank = rs.rank_session(pm, bars, {s: 1.0 for s in bars})
+    at = lambda hhmm: [r["symbol"] for r in rank.snapshots if r["bar_start_utc"] == et(DAY, hhmm).isoformat()]  # noqa: E731
+    assert at("04:05") == ["A", "B", "C", "D", "E"]  # 5 minutes old: still fresh
+    assert at("04:06") == ["LIVE"]  # 6 minutes old: stale, never carried forward
+    old = next(r for r in rank.snapshots if r["bar_start_utc"] == et(DAY, "04:05").isoformat())
+    assert old["minutes_since_trade"] == 5 and old["universe"] == rs.UNIVERSE
+    exits = {r["symbol"]: r["reason"] for r in rank.changes if r["event"] == "exit"}
+    assert exits == {**{s: "stale" for s in "ABCDE"}, "LIVE": "stale"}  # LIVE too, once its 04:09 close ages out
+    assert rank.coverage["stale_exclusion_symbol_minutes"] == 5 * (pm.minutes - 6) + (pm.minutes - 15)
+    assert rank.coverage["max_staleness_minutes"] == 5
 
 
 # ---------- signal sets, multiple signals, missing data ----------
@@ -81,7 +97,8 @@ def _hos_row(sym: str, hhmm: str) -> dict[str, str]:
 
 def test_research_session_filters_by_point_in_time_rank() -> None:
     bars = {"FLG": flag_bars(), "OUT": [flat("OUT", "04:00", 1.02, 500_000)]}
-    bars.update({s: [flat(s, "04:00", 3.0, 200_000)] for s in "ABCDE"})  # five stronger gainers (+200%) from 04:00
+    # five stronger gainers (+200%) trading every minute, so their prices stay fresh through 04:08
+    bars.update({s: [flat(s, f"04:0{m}", 3.0, 200_000) for m in range(9)] for s in "ABCDE"})
     res = rs.research_session(W["premarket"], bars, {s: 1.0 for s in [*bars]},
                               [_hos_row("FLG", "04:08"), _hos_row("OUT", "04:00")], "in_sample", ScanParams())
     assert [r["symbol"] for r in res.signals["hos"]] == ["FLG", "OUT"]  # baseline unchanged

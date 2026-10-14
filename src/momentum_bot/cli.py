@@ -71,6 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     rs = sub.add_parser("m2-research", help="Top 5 (cached universe) variant vs the baseline, in-sample only (no orders).")
     rs.add_argument("--dataset", required=True, help="Dataset folder built by m1-dataset, with references.csv.gz")
     rs.add_argument("--skip-build", action="store_true", help="Reuse research/in_sample rankings and signal sets")
+    rs.add_argument("--fetch-missing-quotes", action="store_true",
+                    help="Allow SIP quote downloads for variant signals not in the quote cache (default: cache only)")
     bt = sub.add_parser("m2-backtest", help="Simulate the breakout strategy against historical SIP quotes (no orders).")
     bt.add_argument("--dataset", required=True, help="Dataset folder built by m1-dataset")
     bt.add_argument("--sample", choices=("in_sample", "out_of_sample"), default="in_sample")
@@ -209,11 +211,13 @@ def _research(args: argparse.Namespace) -> int:
         print(f"error: {dataset / 'references.csv.gz'} not found; rerun m1-dataset (cache only) to write it",
               file=sys.stderr)
         return EXIT_USAGE
-    try:
-        provider = AlpacaHistoricalProvider.from_env()
-    except AuthenticationError as exc:
-        print(f"error: {exc}. See .env.example.", file=sys.stderr)
-        return EXIT_USAGE
+    provider = diagnostics.CacheOnlySource()  # default: no network; a cache miss fails the run explicitly
+    if args.fetch_missing_quotes:
+        try:
+            provider = AlpacaHistoricalProvider.from_env()
+        except AuthenticationError as exc:
+            print(f"error: {exc}. See .env.example.", file=sys.stderr)
+            return EXIT_USAGE
     sample = research.IN_SAMPLE  # exploratory variants never touch the inspected hold-out
     if not args.skip_build:
         print(research.build(dataset, sample, log=print))
@@ -223,6 +227,9 @@ def _research(args: argparse.Namespace) -> int:
                                          backtest.QuoteStore(diagnostics.CacheOnlySource(), cache), sample)  # type: ignore[arg-type]
     except (EntitlementError, AuthenticationError) as exc:
         print(f"error: SIP quotes blocked: {exc}", file=sys.stderr)
+        return EXIT_BLOCKED
+    except diagnostics.CacheMiss as exc:
+        print(f"error: {exc}; rerun with --fetch-missing-quotes to download them (network)", file=sys.stderr)
         return EXIT_BLOCKED
     for k in research.STRATEGIES[1:]:
         summary = {"dataset": str(dataset), "code_sha": code_version(), "orders_placed": 0, "network_requests": 0,
