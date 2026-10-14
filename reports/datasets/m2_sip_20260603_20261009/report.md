@@ -1,7 +1,7 @@
 # M1-B extended-hours dataset report (generated)
 
 **Status:** `complete` · **Trading days:** 90 (2026-06-03 to 2026-10-09) · **API requests this run:** 0 (cached fetches reused: 361) · **Orders placed:** 0  
-**Code:** `e869a3c` · **Created:** 2026-10-13T20:04:22.545725+00:00 · **Data as of:** 2026-10-13T19:48:22.545725+00:00  
+**Code:** `2172bfd` · **Created:** 2026-10-13T21:37:11.148580+00:00 · **Data as of:** 2026-10-13T21:21:11.148580+00:00  
 **Bars:** 1Min SIP and IEX, adjustment=raw · **Reference close:** SIP 1Day bar close (regular-session official close), split-adjusted on ex-dates
 
 ## Universe

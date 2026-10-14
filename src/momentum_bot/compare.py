@@ -47,6 +47,8 @@ class Event:
     change_vs_ref: float | None
     cumulative_volume: int
     candidate_gate: bool  # scan rules held at this bar
+    volume_ratio: float | None = None  # breakouts: bar volume / mean of the previous lookback bars
+    prior_session_high: float | None = None  # breakouts: highest high of the earlier bars in the session
 
     def __post_init__(self) -> None:
         if self.observed_at_utc < self.bar_start_utc + BAR_LENGTH:
@@ -100,16 +102,16 @@ def scan_session(
         in_band = params.min_price <= bar.close <= params.max_price
         gate = in_band and change is not None and change >= min_change and cum_vol >= params.min_session_volume
 
-        def event(kind: str) -> Event:
+        def event(kind: str, ratio: float | None = None, prior_high: float | None = None) -> Event:
             return Event(kind, feed, symbol, d, session, bar.timestamp_utc, bar.timestamp_utc + BAR_LENGTH,
-                         bar.close, change, cum_vol, gate)
+                         bar.close, change, cum_vol, gate, ratio, prior_high)
 
         if gate and candidate is None:
             candidate = event("candidate")
         if i >= params.breakout_lookback and in_band:
             mean_vol = fmean(vols[i - params.breakout_lookback : i])
             if bar.close > session_high and vols[i] >= params.breakout_volume_multiple * mean_vol > 0:
-                breakouts.append(event("breakout"))
+                breakouts.append(event("breakout", vols[i] / mean_vol, session_high))
         session_high = max(session_high, bar.high)
     return candidate, breakouts
 
@@ -201,6 +203,10 @@ def match_events(sip: list[Event], iex: list[Event], *, by_minute: bool) -> list
             "sip_signal_available_utc": s.observed_at_utc.isoformat() if s else None,
             "iex_signal_available_utc": i.observed_at_utc.isoformat() if i else None,
             "sip_price": s.price if s else None,
+            "sip_change_vs_ref": s.change_vs_ref if s else None,
+            "sip_session_volume": s.cumulative_volume if s else None,
+            "sip_volume_ratio": s.volume_ratio if s else None,
+            "sip_prior_session_high": s.prior_session_high if s else None,
             "iex_lag_minutes": lag,
             "sip_candidate_gate": s.candidate_gate if s else None,
             "iex_candidate_gate": i.candidate_gate if i else None,

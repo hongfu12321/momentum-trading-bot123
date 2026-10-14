@@ -102,9 +102,17 @@ momentum-bot m2-backtest --dataset reports/datasets/m2_sip_20260603_20261009 --s
 
 Simulates the candidate-gated SIP breakout strategy (`candle_close_confirmation`: entries only after the trigger bar closes; intrabar resistance-cross entries are a separate future strategy) against historical SIP quotes in three scenarios (`idealized` reference, quote-aware `base`, `stress`). Orders reach the market only after the trigger bar completes plus latency. They fill only on fresh, executable quotes within the spread cap and displayed size; the same displayed shares are never taken twice, and the unfilled remainder expires after the entry timeout. Exits that do not fully fill within 2 minutes are reported as incomplete, with unsold shares marked separately from realized P&L. Fees and risk limits follow `docs/DESIGN.md`. The aggregate result goes to `backtest_summary_<sample>.json`; per-trade rows stay local under `backtest/`. Out-of-sample runs require `--confirm-out-of-sample` and should be run once, with frozen settings. Results: `reports/m2_backtest.md`. Spread-cap comparison on in-sample data: `--spread-caps 50,100,150,200`; the frozen out-of-sample run: `--sample out_of_sample --spread-caps 50 --confirm-out-of-sample`.
 
+## Trade diagnostics (why trades win or lose)
+
+```bash
+momentum-bot m2-diagnostics --dataset reports/datasets/m2_sip_20260603_20261009 --sample in_sample --scenario base_cap50
+```
+
+Replays only the cached backtest quotes and makes no network requests. It writes reason-coded signal and trade ledgers, MFE/MAE, post-entry moves, slippage and spread cost, and bucketed breakdowns with small-sample flags. Entry-time features are kept separate from post-entry diagnostics. The aggregate report and JSON are committable. Ledgers, failure cases and the standalone `dashboard.html` stay local. Out-of-sample needs `--confirm-out-of-sample` and is for reporting only. Data dictionary: `docs/m2_diagnostics.md`. Findings: `reports/m2_diagnostics.md`.
+
 ## Licensed data stays local
 
-Raw bars, quotes, per-symbol tables and input snapshots are Alpaca or third-party data and are git-ignored. Only aggregate outputs are committed: `report.md`, `manifest.json` (including the sha256 of every input snapshot), count-only `eligibility.csv`, `quote_probe_summary.json` and `backtest_summary_*.json`.
+Raw bars, quotes, per-symbol tables and input snapshots are Alpaca or third-party data and are git-ignored. Only aggregate outputs are committed: `report.md`, `manifest.json` (including the sha256 of every input snapshot), count-only `eligibility.csv`, `quote_probe_summary.json`, `backtest_summary_*.json` and `diagnostics_*.{json,md}`.
 
 ## Safety
 

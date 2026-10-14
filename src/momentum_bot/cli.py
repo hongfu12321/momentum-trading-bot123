@@ -10,7 +10,7 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import backtest, quotes
+from . import backtest, diagnostics, quotes
 from .data.alpaca_assets import AlpacaPaperAssets
 from .data.alpaca_historical import AlpacaHistoricalProvider
 from .data.market_calendar import CalendarCoverageError
@@ -73,6 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--scenarios", default="idealized,base,stress", help=f"Comma-separated: {','.join(backtest.SCENARIOS)}")
     bt.add_argument("--spread-caps", default="50",
                     help="Comma-separated entry spread caps in bps; each capped scenario runs once per cap")
+    dg = sub.add_parser("m2-diagnostics", help="Per-signal/per-trade diagnostics of a backtest run (cache only, no network).")
+    dg.add_argument("--dataset", required=True, help="Dataset folder with backtest/ outputs")
+    dg.add_argument("--sample", choices=("in_sample", "out_of_sample"), default="in_sample")
+    dg.add_argument("--scenario", default="base_cap50", help="Backtest scenario folder, e.g. base_cap50 (the frozen configuration)")
+    dg.add_argument("--confirm-out-of-sample", action="store_true",
+                    help="Required for out_of_sample: report only, never use it to choose filters or parameters")
     bt.add_argument("--confirm-out-of-sample", action="store_true",
                     help="Required for --sample out_of_sample: the hold-out should be evaluated once, with frozen configs")
     return parser
@@ -87,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
         return _quote_probe(args)
     if args.command == "m2-backtest":
         return _backtest(args)
+    if args.command == "m2-diagnostics":
+        return _diagnostics(args)
     symbols = _symbols(args)
     if not symbols:
         print("error: provide --symbols or --symbols-file", file=sys.stderr)
@@ -207,6 +215,27 @@ def _backtest(args: argparse.Namespace) -> int:
     path = dataset / f"backtest_summary_{args.sample}.json"
     path.write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
     print(f"summary: {path} ({provider.request_count} API requests, 0 orders)")
+    return EXIT_OK
+
+
+def _diagnostics(args: argparse.Namespace) -> int:
+    dataset = Path(args.dataset)
+    if args.sample == "out_of_sample" and not args.confirm_out_of_sample:
+        print("error: out-of-sample diagnostics need --confirm-out-of-sample (report only; no tuning)", file=sys.stderr)
+        return EXIT_USAGE
+    try:  # refuse stale, edited or mismatched inputs before producing any report
+        provenance = diagnostics.validate_inputs(dataset, args.sample, args.scenario)
+    except diagnostics.InputMismatch as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    summary = {"dataset": dataset.as_posix(), "code_sha": code_version(), "orders_placed": 0, "network_requests": 0,
+               "created_at_utc": datetime.now(timezone.utc).isoformat(), "provenance": provenance,
+               **diagnostics.run(dataset, args.sample, args.scenario)}
+    stem = f"diagnostics_{args.sample}_{args.scenario}"
+    (dataset / f"{stem}.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
+    (dataset / f"{stem}.md").write_text(diagnostics.render_report(summary), encoding="utf-8")
+    print(f"{summary['trades']} trades diagnosed; aggregate report: {dataset / (stem + '.md')}")
+    print(f"local ledgers and dashboard: {dataset / 'diagnostics' / args.sample / args.scenario}")
     return EXIT_OK
 
 

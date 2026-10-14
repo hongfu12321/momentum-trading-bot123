@@ -16,3 +16,5 @@ reports/datasets/*/*
 !reports/datasets/*/eligibility.csv
 !reports/datasets/*/quote_probe_summary.json
 !reports/datasets/*/backtest_summary_*.json
+!reports/datasets/*/diagnostics_*.json
+!reports/datasets/*/diagnostics_*.md
