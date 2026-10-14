@@ -1,0 +1,238 @@
+{
+  "dataset": "reports/datasets/m2_sip_20260603_20261009",
+  "code_sha": "0359128",
+  "created_at_utc": "2026-10-14T16:10:00.864970+00:00",
+  "sample": "in_sample",
+  "days": 59,
+  "sessions_missing_bars": [],
+  "orders_placed": 0,
+  "network_requests": 0,
+  "trade_prints_cached": false,
+  "params": {
+    "flag": {
+      "pole_min_gain": 0.05,
+      "pole_min_bars": 3,
+      "pole_max_bars": 10,
+      "flag_min_bars": 2,
+      "flag_max_bars": 8,
+      "max_pullback": 0.5,
+      "breakout_volume_multiple": 1.5,
+      "exclude_closing_auction_bar": true
+    },
+    "arm_bars": 3,
+    "max_hold": "0:15:00",
+    "entry_cutoff_before_close": "0:10:00",
+    "flatten_before_close": "0:02:00",
+    "limit_offset_bps": 20.0,
+    "ohlc_cost_bps": 25.0,
+    "ohlc_volume_share": 0.1
+  },
+  "stress": {
+    "nbbo": "latency 2 s, 50% of displayed size, 10 bps adverse",
+    "ohlc_cost_bps_per_side": 50.0
+  },
+  "inputs_sha256_before": "bc8e482377797477477efac1ccebf05720b99e69329306226c8344d1397872c3",
+  "inputs_sha256_after": "bc8e482377797477477efac1ccebf05720b99e69329306226c8344d1397872c3",
+  "inputs_unchanged": true,
+  "strategies": {
+    "bf_intrabar": {
+      "label": "Bull Flag intrabar (no Top 5 filter)",
+      "quote_coverage": {
+        "setups": 7208,
+        "nbbo_covered": 20
+      },
+      "base": {
+        "setups_detected": 7208,
+        "breakout_signals": 2620,
+        "no_trigger": 861,
+        "invalidated_before_trigger": 3727,
+        "skipped": {
+          "position_open": 80,
+          "daily_entry_limit": 908,
+          "after_entry_cutoff": 181,
+          "loss_streak_pause": 1107,
+          "daily_loss_limit": 111
+        },
+        "rejected": {},
+        "non_fill": {},
+        "entries": 233,
+        "completed_trades": 233,
+        "incomplete_exits": 0,
+        "same_symbol_reentries": 66,
+        "by_mode": {
+          "ohlc_approx": 230,
+          "nbbo_proxy": 3
+        },
+        "sequencing": {
+          "uncertain": 72,
+          "approximate": 158,
+          "proxy": 3
+        },
+        "reliable_sequencing_trades": 0,
+        "exit_reasons": {
+          "stop": 117,
+          "red_candle": 116
+        },
+        "win_rate": 0.2317596566523605,
+        "avg_winner_usd": 23.079342583818086,
+        "avg_loser_usd": -11.290220503889872,
+        "mean_r": -0.30985220582827167,
+        "median_r": -1.0182237232028875,
+        "net_usd": -774.6649706701104,
+        "max_drawdown_usd": 774.66497067011,
+        "profit_factor": 0.6166826622365427,
+        "notes": {
+          "same_minute_entry_and_stop": 72,
+          "missing_bars_while_held": 2
+        }
+      },
+      "stress": {
+        "setups_detected": 7208,
+        "breakout_signals": 2620,
+        "no_trigger": 861,
+        "invalidated_before_trigger": 3727,
+        "skipped": {
+          "position_open": 79,
+          "daily_entry_limit": 854,
+          "after_entry_cutoff": 181,
+          "loss_streak_pause": 1054,
+          "daily_loss_limit": 220
+        },
+        "rejected": {},
+        "non_fill": {
+          "timeout_spread_above_cap": 1
+        },
+        "entries": 231,
+        "completed_trades": 231,
+        "incomplete_exits": 0,
+        "same_symbol_reentries": 65,
+        "by_mode": {
+          "ohlc_approx": 229,
+          "nbbo_proxy": 2
+        },
+        "sequencing": {
+          "uncertain": 72,
+          "approximate": 157,
+          "proxy": 2
+        },
+        "reliable_sequencing_trades": 0,
+        "exit_reasons": {
+          "stop": 117,
+          "red_candle": 114
+        },
+        "win_rate": 0.19913419913419914,
+        "avg_winner_usd": 21.791554342129817,
+        "avg_loser_usd": -12.734662780837718,
+        "mean_r": -0.47108600991353955,
+        "median_r": -1.041876310348483,
+        "net_usd": -1353.5011147170062,
+        "max_drawdown_usd": 1353.5011147170067,
+        "profit_factor": 0.4254875556875745,
+        "notes": {
+          "same_minute_entry_and_stop": 72,
+          "missing_bars_while_held": 2,
+          "partial_entry": 1
+        }
+      }
+    },
+    "top5_bf_intrabar": {
+      "label": "Bull Flag intrabar, Top 5 (cached universe) at the setup bar",
+      "quote_coverage": {
+        "setups": 5335,
+        "nbbo_covered": 19
+      },
+      "base": {
+        "setups_detected": 5335,
+        "breakout_signals": 1981,
+        "no_trigger": 543,
+        "invalidated_before_trigger": 2811,
+        "skipped": {
+          "position_open": 76,
+          "daily_entry_limit": 724,
+          "after_entry_cutoff": 116,
+          "loss_streak_pause": 762,
+          "daily_loss_limit": 62
+        },
+        "rejected": {},
+        "non_fill": {},
+        "entries": 241,
+        "completed_trades": 241,
+        "incomplete_exits": 0,
+        "same_symbol_reentries": 78,
+        "by_mode": {
+          "ohlc_approx": 239,
+          "nbbo_proxy": 2
+        },
+        "sequencing": {
+          "uncertain": 84,
+          "approximate": 155,
+          "proxy": 2
+        },
+        "reliable_sequencing_trades": 0,
+        "exit_reasons": {
+          "stop": 119,
+          "red_candle": 122
+        },
+        "win_rate": 0.26556016597510373,
+        "avg_winner_usd": 21.348669345033656,
+        "avg_loser_usd": -11.38682395323926,
+        "mean_r": -0.25797389321679853,
+        "median_r": -0.9960071920211423,
+        "net_usd": -649.1530016411951,
+        "max_drawdown_usd": 693.3699063321599,
+        "profit_factor": 0.6779144827583553,
+        "notes": {
+          "same_minute_entry_and_stop": 84,
+          "missing_bars_while_held": 1
+        }
+      },
+      "stress": {
+        "setups_detected": 5335,
+        "breakout_signals": 1981,
+        "no_trigger": 543,
+        "invalidated_before_trigger": 2811,
+        "skipped": {
+          "position_open": 76,
+          "daily_entry_limit": 653,
+          "after_entry_cutoff": 116,
+          "loss_streak_pause": 799,
+          "daily_loss_limit": 100
+        },
+        "rejected": {},
+        "non_fill": {
+          "timeout_spread_above_cap": 1
+        },
+        "entries": 236,
+        "completed_trades": 236,
+        "incomplete_exits": 0,
+        "same_symbol_reentries": 75,
+        "by_mode": {
+          "ohlc_approx": 235,
+          "nbbo_proxy": 1
+        },
+        "sequencing": {
+          "uncertain": 82,
+          "approximate": 153,
+          "proxy": 1
+        },
+        "reliable_sequencing_trades": 0,
+        "exit_reasons": {
+          "stop": 117,
+          "red_candle": 119
+        },
+        "win_rate": 0.22033898305084745,
+        "avg_winner_usd": 20.968929791454773,
+        "avg_loser_usd": -12.59616837610211,
+        "mean_r": -0.4199055608599598,
+        "median_r": -1.0329566092568019,
+        "net_usd": -1227.3106320471404,
+        "max_drawdown_usd": 1227.3106320471406,
+        "profit_factor": 0.47046067666323527,
+        "notes": {
+          "same_minute_entry_and_stop": 82,
+          "missing_bars_while_held": 1
+        }
+      }
+    }
+  }
+}
