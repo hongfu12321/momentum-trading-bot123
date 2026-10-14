@@ -12,6 +12,8 @@ dependencies = ["tzdata==2025.2"]
 
 [project.optional-dependencies]
 dev = ["pytest==8.3.4"]
+# Localhost replay viewer and chart export only (m2-viewer, m2-chart); nothing else needs them.
+viewer = ["streamlit==1.45.1", "plotly==6.1.2"]
 
 [project.scripts]
 momentum-bot = "momentum_bot.cli:main"
