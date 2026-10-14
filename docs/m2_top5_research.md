@@ -12,6 +12,7 @@ Historical simulation only. Nothing here can place, change or route an order. Th
 
 - It rebuilds the Top 5 rankings, Bull Flag candidates and signal sets from the cached SIP bars (no API calls).
 - It is cache-only by default: a variant signal whose SIP quotes are not in `cache/backtest_quotes` stops the run with an explicit error instead of downloading them. `--fetch-missing-quotes` allows the download (Alpaca keys required).
+- A variant whose quotes are not all cached is not backtested in a cache-only run; the comparison reports it as blocked with its quote coverage, never a backtest of part of its signals.
 - It backtests the three strategies with the frozen `base_cap50` model and runs the PR #5 diagnostics on the two variants.
 - The baseline is rerun from the quote cache only, and the run fails unless it reproduces the PR #4 ledgers byte for byte, so baseline results cannot change.
 - Variant diagnostics record their provenance (dataset, signal and ledger hashes, configuration) under `provenance_variant`.
@@ -24,8 +25,9 @@ Historical simulation only. Nothing here can place, change or route an order. Th
 | Original HOS Breakout | The PR #4 baseline: candidate-gated SIP completed-bar session-high breakouts. |
 | Top 5 (cached universe) HOS Breakout | The same breakouts, kept only when the symbol is in the Top 5 snapshot of the trigger bar. |
 | Top 5 (cached universe) + Bull Flag Breakout | Qualified Bull Flag breakouts of a symbol in the Top 5 at the breakout bar that also pass the scanner gate (price $1–$20, change ≥ 10% premarket / 5% after hours, session volume ≥ 100k). |
+| Bull Flag Breakout (no Top 5 filter) | Qualified Bull Flag breakouts of any symbol in the cached universe that pass the scanner gate; Top 5 membership is not required. Compares the effect of the Top 5 filter. |
 
-Unchanged for all three: 3% stop, 2R target, 15-minute time exit, entry cutoff and flatten times, 0.5 s latency, 10 s entry timeout, 50 bps spread cap, $15 risk per trade, one position at a time, and the shared daily limits (5 entries, $45 loss, 3-loss pause). A position is never closed because its symbol leaves the Top 5; exits are only the existing stop, target, time and session-end rules.
+Unchanged for all four: 3% stop, 2R target, 15-minute time exit, entry cutoff and flatten times, 0.5 s latency, 10 s entry timeout, 50 bps spread cap, $15 risk per trade, one position at a time, and the shared daily limits (5 entries, $45 loss, 3-loss pause). A position is never closed because its symbol leaves the Top 5; exits are only the existing stop, target, time and session-end rules.
 
 ## Point-in-time ranking
 
