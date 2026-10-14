@@ -15,7 +15,7 @@ Historical simulation only. Nothing here can place, change or route an order; th
 ```
 
 - **`m2-viewer`** needs only the outputs of `m2-backtest` and `m2-diagnostics`. It reads local files only. Changing the date, session, stock or a filter never reruns a backtest. Each session's 1-minute bars load from the SIP cache when first opened, and the last 12 sessions stay in memory.
-- **`m2-chart`** writes one standalone HTML file per session to `research/in_sample/charts/<date>_<session>_<strategy>.html`. Plotly is inlined, so no network is needed. The viewer's export button does the same.
+- **`m2-chart`** writes one standalone HTML file per session to `charts/<date>_<session>_<strategy>.html` in the dataset folder (git-ignored). Plotly is inlined, so no network is needed. The viewer's export button does the same.
 - **`m2-research`** builds the optional research layers:
   - It rebuilds Top 5 rankings, Bull Flag candidates and signal sets from the cached SIP bars (about 2.5 minutes, no API calls).
   - It backtests the three strategies with the frozen `base_cap50` model and runs the PR #5 diagnostics on the two variants.
@@ -105,6 +105,6 @@ Each candidate logs pole and flag start/end, pole base and top, flag high, low a
 | `research/in_sample/filtered.csv.gz`, `decisions.csv.gz` | filter-stage removals and every backtester outcome, in time order | no |
 | `backtest/in_sample/<variant>/base_cap50/` | `trades.csv`, `attempts.csv` | no |
 | `diagnostics/in_sample/<variant>/base_cap50/` | PR #5 ledgers, failure cases and dashboard for each variant | no |
-| `research/in_sample/charts/*.html` | exported annotated charts | no |
+| `charts/*.html` | exported annotated charts | no |
 | `research_comparison_in_sample.{json,md}` | aggregate comparison, Top 5 coverage and Bull Flag rule counts | yes |
 | `diagnostics_in_sample_<variant>_base_cap50.{json,md}` | PR #5 aggregate diagnostics per variant | yes |

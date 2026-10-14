@@ -399,7 +399,7 @@ def export_session(dataset: Path, d: str, session: str, strategy: str = "hos",
     parts = []
     for i, sym in enumerate(data.chart_symbols):
         parts.append(figure(data, sym).to_html(full_html=False, include_plotlyjs="inline" if i == 0 else False))
-    path = _research_dir(dataset) / "charts" / f"{d}_{session}_{strategy}.html"
+    path = dataset / "charts" / f"{d}_{session}_{strategy}.html"  # local, git-ignored like the rest of the dataset folder
     path.parent.mkdir(parents=True, exist_ok=True)
     head = (f"<!doctype html><html><head><meta charset='utf-8'><title>{d} {session} Top 5 charts</title></head>"
             f"<body style='font-family:sans-serif;margin:16px'><h2>{d} {session} · {STRATEGY_LABELS[strategy]}</h2>"
