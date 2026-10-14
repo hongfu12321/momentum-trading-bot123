@@ -607,8 +607,50 @@ class InputMismatch(ValueError):
     """The dataset, backtest summary and ledgers do not belong together; diagnostics refuse to run."""
 
 
+# Canonical hashing policy for provenance records. Text files are hashed with Windows CRLF line endings
+# normalized to LF, so the same content hashes the same after a Windows write or a git checkout with
+# core.autocrlf; every other file (e.g. .gz) is hashed as raw bytes. Records written before this policy
+# have no "hash_policy" field and may hold a raw CRLF hash: see hash_check.
+HASH_POLICY = "sha256-text-lf-v1"
+TEXT_SUFFIXES = frozenset({".csv", ".json", ".md", ".txt"})
+
+
+def _canonical_bytes(path: Path) -> bytes:
+    data = path.read_bytes()
+    return data.replace(b"\r\n", b"\n") if path.suffix in TEXT_SUFFIXES else data
+
+
 def sha256_of(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """Content hash under HASH_POLICY."""
+    return hashlib.sha256(_canonical_bytes(path)).hexdigest()
+
+
+def hash_check(path: Path, recorded: str | None, policy: str | None) -> str:
+    """Compare a file with a recorded hash: "ok", "missing", "mismatch", or "legacy_crlf" when a record
+    without a hash policy holds the raw hash of the same text written with CRLF line endings (Windows)."""
+    if not path.is_file():
+        return "missing"
+    if sha256_of(path) == recorded:
+        return "ok"
+    if policy is None and path.suffix in TEXT_SUFFIXES:
+        if hashlib.sha256(_canonical_bytes(path).replace(b"\n", b"\r\n")).hexdigest() == recorded:
+            return "legacy_crlf"
+    return "mismatch"
+
+
+def sample_dates(manifest: Mapping[str, object], sample: str, signals: set[tuple[str, str]]) -> list[str]:
+    """Trading days of a sample: the manifest's split range, else the days with a signal."""
+    blk = manifest.get("chronological_split", {}).get(sample)  # type: ignore[union-attr]
+    if blk and manifest.get("trading_days"):
+        return [d for d in manifest["trading_days"] if blk["first"] <= d <= blk["last"]]  # type: ignore[union-attr]
+    return sorted({datetime.fromisoformat(t).astimezone(ET).date().isoformat() for _, t in signals})
+
+
+def sip_bar_hashes(dataset: Path, days: Iterable[str]) -> dict[str, str]:
+    """sha256 of every cached SIP 1-minute bar file of those days, keyed by file name (raw bytes: gzip)."""
+    wanted = set(days)
+    return {p.name: sha256_of(p) for p in sorted((dataset / "cache" / "sip").glob("*_*_*.csv.gz"))
+            if p.name[:10] in wanted and p.name[11:].startswith(("premarket_", "afterhours_"))}
 
 
 def _typed(cls: type, row: Mapping[str, str]) -> object:
@@ -687,11 +729,16 @@ def validate_inputs(dataset: Path, sample: str, scenario: str, strat: StrategyCo
     if problems:
         raise InputMismatch("diagnostics inputs are inconsistent:\n- " + "\n- ".join(problems))
     return {
+        "hash_policy": HASH_POLICY,
         "dataset": {"path": dataset.as_posix(), "manifest_sha256": sha256_of(paths["manifest"]),
                     "manifest_created_at_utc": manifest.get("created_at_utc"),
                     "manifest_code_sha": manifest.get("code_sha"),
                     "breakout_matches_sha256": sha256_of(paths["breakout_matches"]),
-                    "input_sha256": {k: v for k, v in manifest.get("inputs", {}).items() if k.endswith("sha256")}},
+                    "input_sha256": {k: v for k, v in manifest.get("inputs", {}).items() if k.endswith("sha256")},
+                    # Local display inputs of the replay viewer, so it can refuse edited or swapped files.
+                    "candidates_sha256": sha256_of(dataset / "candidates.csv.gz")
+                    if (dataset / "candidates.csv.gz").is_file() else None,
+                    "sip_bars_sha256": sip_bar_hashes(dataset, sample_dates(manifest, sample, signals))},
         "backtest_run": {"summary_file": paths["backtest_summary"].name,
                          "summary_sha256": sha256_of(paths["backtest_summary"]),
                          "code_sha": summary.get("code_sha"), "created_at_utc": summary.get("created_at_utc"),

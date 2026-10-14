@@ -22,6 +22,7 @@ from .provenance import code_version
 from .report import write_outputs
 
 EXIT_OK, EXIT_PARTIAL, EXIT_USAGE, EXIT_BLOCKED = 0, 1, 2, 3
+EXIT_MISMATCH = 4  # m2-viewer-check: the viewer would show something the ledgers do not support
 
 
 def load_dotenv(path: Path = Path(".env")) -> None:
@@ -70,6 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     rs = sub.add_parser("m2-research", help="Top 5 (cached universe) variant vs the baseline, in-sample only (no orders).")
     rs.add_argument("--dataset", required=True, help="Dataset folder built by m1-dataset, with references.csv.gz")
     rs.add_argument("--skip-build", action="store_true", help="Reuse research/in_sample rankings and signal sets")
+    rs.add_argument("--fetch-missing-quotes", action="store_true",
+                    help="Allow SIP quote downloads for variant signals not in the quote cache (default: cache only)")
     bt = sub.add_parser("m2-backtest", help="Simulate the breakout strategy against historical SIP quotes (no orders).")
     bt.add_argument("--dataset", required=True, help="Dataset folder built by m1-dataset")
     bt.add_argument("--sample", choices=("in_sample", "out_of_sample"), default="in_sample")
@@ -84,6 +87,28 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Required for out_of_sample: report only, never use it to choose filters or parameters")
     bt.add_argument("--confirm-out-of-sample", action="store_true",
                     help="Required for --sample out_of_sample: the hold-out should be evaluated once, with frozen configs")
+    ch = sub.add_parser("m2-chart", help="Export one session's annotated baseline replay charts to a standalone local HTML file.")
+    ch.add_argument("--dataset", required=True, help="Dataset folder with m2-diagnostics outputs")
+    ch.add_argument("--date", required=True, help="Trading date, YYYY-MM-DD")
+    ch.add_argument("--session", choices=("premarket", "afterhours"), default="premarket")
+    vc = sub.add_parser("m2-viewer-check", help="Audit what the replay viewer shows against the backtest ledgers (offline).")
+    vc.add_argument("--dataset", default="reports/datasets/m2_sip_20260603_20261009", help="Dataset folder")
+    bk = sub.add_parser("dataset-backup", help="Snapshot a dataset to a private rclone remote (dry run unless --confirm).")
+    bk.add_argument("--dataset", required=True, help="Dataset folder, e.g. reports/datasets/m2_sip_20260603_20261009")
+    bk.add_argument("--remote", required=True, help="rclone remote and folder, e.g. gdrive:trading-research")
+    bk.add_argument("--confirm", action="store_true", help="Upload. Without it, only the plan and size are printed")
+    rt = sub.add_parser("dataset-restore", help="Download and verify a snapshot into a new folder (never overwrites).")
+    rt.add_argument("--snapshot", required=True, help="Snapshot id from dataset-list")
+    rt.add_argument("--remote", required=True, help="rclone remote and folder, e.g. gdrive:trading-research")
+    rt.add_argument("--destination", required=True, help="New dataset folder; must not exist")
+    ls = sub.add_parser("dataset-list", help="List dataset snapshots on a remote, complete or not.")
+    ls.add_argument("--remote", required=True, help="rclone remote and folder, e.g. gdrive:trading-research")
+    vf = sub.add_parser("dataset-verify", help="Verify a dataset folder against snapshot checksums (offline).")
+    vf.add_argument("--dataset", required=True, help="Dataset folder")
+    vf.add_argument("--checksums", help="checksums.json; default <dataset>/.snapshot/checksums.json")
+    vw = sub.add_parser("m2-viewer", help="Launch the localhost historical replay viewer (Streamlit, 127.0.0.1 only).")
+    vw.add_argument("--dataset", default="reports/datasets/m2_sip_20260603_20261009", help="Dataset folder")
+    vw.add_argument("--port", type=int, default=8501)
     return parser
 
 
@@ -100,6 +125,14 @@ def main(argv: list[str] | None = None) -> int:
         return _backtest(args)
     if args.command == "m2-diagnostics":
         return _diagnostics(args)
+    if args.command == "m2-chart":
+        return _chart(args)
+    if args.command == "m2-viewer":
+        return _viewer(args)
+    if args.command == "m2-viewer-check":
+        return _viewer_check(args)
+    if args.command.startswith("dataset-"):
+        return _dataset_snapshot(args)
     symbols = _symbols(args)
     if not symbols:
         print("error: provide --symbols or --symbols-file", file=sys.stderr)
@@ -178,11 +211,13 @@ def _research(args: argparse.Namespace) -> int:
         print(f"error: {dataset / 'references.csv.gz'} not found; rerun m1-dataset (cache only) to write it",
               file=sys.stderr)
         return EXIT_USAGE
-    try:
-        provider = AlpacaHistoricalProvider.from_env()
-    except AuthenticationError as exc:
-        print(f"error: {exc}. See .env.example.", file=sys.stderr)
-        return EXIT_USAGE
+    provider = diagnostics.CacheOnlySource()  # default: no network; a cache miss fails the run explicitly
+    if args.fetch_missing_quotes:
+        try:
+            provider = AlpacaHistoricalProvider.from_env()
+        except AuthenticationError as exc:
+            print(f"error: {exc}. See .env.example.", file=sys.stderr)
+            return EXIT_USAGE
     sample = research.IN_SAMPLE  # exploratory variants never touch the inspected hold-out
     if not args.skip_build:
         print(research.build(dataset, sample, log=print))
@@ -192,6 +227,9 @@ def _research(args: argparse.Namespace) -> int:
                                          backtest.QuoteStore(diagnostics.CacheOnlySource(), cache), sample)  # type: ignore[arg-type]
     except (EntitlementError, AuthenticationError) as exc:
         print(f"error: SIP quotes blocked: {exc}", file=sys.stderr)
+        return EXIT_BLOCKED
+    except diagnostics.CacheMiss as exc:
+        print(f"error: {exc}; rerun with --fetch-missing-quotes to download them (network)", file=sys.stderr)
         return EXIT_BLOCKED
     for k in research.STRATEGIES[1:]:
         summary = {"dataset": str(dataset), "code_sha": code_version(), "orders_placed": 0, "network_requests": 0,
@@ -279,12 +317,92 @@ def _diagnostics(args: argparse.Namespace) -> int:
     summary = {"dataset": dataset.as_posix(), "code_sha": code_version(), "orders_placed": 0, "network_requests": 0,
                "created_at_utc": datetime.now(timezone.utc).isoformat(), "provenance": provenance,
                **diagnostics.run(dataset, args.sample, args.scenario)}
+    ledgers = dataset / "diagnostics" / args.sample / args.scenario  # hashed so the replay viewer refuses edited ledgers
+    summary["ledgers_sha256"] = {n: diagnostics.sha256_of(ledgers / n) for n in ("signal_ledger.csv", "trade_ledger.csv")}
     stem = f"diagnostics_{args.sample}_{args.scenario}"
     (dataset / f"{stem}.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
     (dataset / f"{stem}.md").write_text(diagnostics.render_report(summary), encoding="utf-8")
     print(f"{summary['trades']} trades diagnosed; aggregate report: {dataset / (stem + '.md')}")
     print(f"local ledgers and dashboard: {dataset / 'diagnostics' / args.sample / args.scenario}")
     return EXIT_OK
+
+
+def _chart(args: argparse.Namespace) -> int:
+    from . import charts  # plotly is an optional dependency: pip install -e ".[viewer]"
+
+    try:
+        path = charts.export_session(Path(args.dataset), args.date, args.session)
+    except (FileNotFoundError, ValueError) as exc:  # includes charts.ReplayDataError (refused provenance)
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    print(f"charts: {path} (local only: contains licensed market data; do not commit or publish)")
+    return EXIT_OK
+
+
+def _viewer_check(args: argparse.Namespace) -> int:
+    from . import charts
+
+    dataset = Path(args.dataset)
+    try:
+        tables = charts.ReplayTables.load(dataset)
+        report = charts.audit(dataset, tables)
+    except (FileNotFoundError, ValueError) as exc:  # refused provenance, ambiguous or edited bar files
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    for smp, chk in tables.checks.items():
+        print(f"{smp}: {chk.status}" + "".join(f"\n  problem: {x}" for x in chk.problems)
+              + "".join(f"\n  warning: {x}" for x in chk.warnings) + "".join(f"\n  note: {x}" for x in chk.notes))
+    for smp, r in report["samples"].items():  # type: ignore[union-attr]
+        if r["status"] == "ok":
+            v = r["viewer_ledgers"]
+            print(f"{smp}: {r['dates']} dates; signals {v['signals']}, entries {v['entries']}, completed {v['completed']}, "
+                  f"incomplete {v['incomplete']}, net (completed) ${v['net_usd_completed']:.2f}, realized (incomplete) "
+                  f"${v['realized_usd_incomplete']:.2f}, marked (incomplete) ${v['marked_usd_incomplete']:.2f}")
+    print(f"sessions {report['sessions']}; markers checked {report['markers_checked']} {report['markers']}")
+    print(f"mismatches: {report['mismatch_count']}" + "".join(f"\n  {x}" for x in report["mismatches"]))  # type: ignore[union-attr]
+    path = dataset / "viewer_check.json"  # names symbols in mismatches: local, git-ignored with the dataset folder
+    path.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
+    print(f"report: {path} (0 network requests, 0 orders)")
+    return EXIT_OK if not report["mismatch_count"] else EXIT_MISMATCH
+
+
+def _viewer(args: argparse.Namespace) -> int:
+    import subprocess
+
+    app = Path(__file__).with_name("viewer.py")
+    cmd = [sys.executable, "-m", "streamlit", "run", str(app), "--server.address", "127.0.0.1",
+           "--server.port", str(args.port), "--browser.gatherUsageStats", "false", "--", "--dataset", args.dataset]
+    return subprocess.call(cmd)
+
+
+def _dataset_snapshot(args: argparse.Namespace) -> int:
+    from . import backup as bk
+
+    try:
+        if args.command == "dataset-verify":
+            problems = bk.verify_dataset(Path(args.dataset), Path(args.checksums) if args.checksums else None)
+            print("\n".join(problems) if problems else f"{args.dataset}: every file matches the snapshot checksums")
+            return EXIT_OK if not problems else EXIT_MISMATCH
+        if args.command == "dataset-list":
+            for r in bk.list_snapshots(args.remote, bk.transport_for(args.remote)):
+                print(f"{r['dataset_name']}  {r['snapshot_id']}  {'COMPLETE' if r['complete'] else 'INCOMPLETE'}  "
+                      f"{r['files']} files  {int(r['bytes']) / 1e6:,.1f} MB")
+            return EXIT_OK
+        if args.command == "dataset-restore":
+            bk.restore(args.remote, args.snapshot, Path(args.destination), bk.transport_for(args.remote))
+            return EXIT_OK
+        plan = bk.plan_backup(Path(args.dataset), args.remote, commit=bk.source_commit(Path(__file__).parents[2]))
+        print(f"snapshot {plan.snapshot_id}: {plan.manifest['file_count']} files, "
+              f"{plan.inventory.total_bytes / 1e6:,.1f} MB -> {plan.remote_dir}")
+        print(f"excluded: {plan.inventory.excluded or 'nothing'}; source commit {plan.manifest['source_commit']}")
+        if not args.confirm:
+            print("dry run: nothing uploaded. Re-run with --confirm to upload this snapshot.")
+            return EXIT_OK
+        bk.backup(plan, bk.transport_for(args.remote))
+        return EXIT_OK
+    except bk.BackupError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_PARTIAL
 
 
 if __name__ == "__main__":

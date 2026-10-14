@@ -120,7 +120,7 @@ No code path places, replaces or cancels orders; the backtest is an offline simu
 
 ## Top 5 and Bull Flag research (exploratory, in-sample only)
 
-`m2-research --dataset <dataset>` ranks the Top 5 gainers within the dataset's cached sub-$20 universe after every completed 1-minute bar (point in time, never market-wide) and backtests two variants of the baseline with the frozen `base_cap50` model: Top 5 filtered breakouts, and Bull Flag breakouts (`bullflag.py`, an untuned detector that reads completed bars only) of Top 5 members. It refuses the out-of-sample block and fails unless the baseline rerun reproduces the PR #4 ledgers byte for byte. The committed `research_comparison_in_sample.{json,md}` are aggregate only. Method: `docs/m2_top5_research.md`. Results: `reports/m2_top5_bullflag.md`.
+`m2-research --dataset <dataset>` ranks the Top 5 gainers within the dataset's cached sub-$20 universe after every completed 1-minute bar (point in time, never market-wide) and backtests two variants of the baseline with the frozen `base_cap50` model: Top 5 filtered breakouts, and Bull Flag breakouts (`bullflag.py`, an untuned detector that reads completed bars only) of Top 5 members. It is cache-only by default (`--fetch-missing-quotes` opts in to quote downloads), refuses the out-of-sample block and fails unless the baseline rerun reproduces the PR #4 ledgers byte for byte. The committed `research_comparison_in_sample.{json,md}` are aggregate only. Method: `docs/m2_top5_research.md`. Results: `reports/m2_top5_bullflag.md`.
 
 ## Tests
 
