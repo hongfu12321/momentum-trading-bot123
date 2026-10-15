@@ -82,6 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Aggregate, symbol-free summary (committed)")
     bi.add_argument("--quote-cache", default="research_out/bull_flag_intrabar/quote_cache",
                     help="Research-only SIP quote cache outside the dataset (local, git-ignored)")
+    bi.add_argument("--sessions", nargs="+", choices=("premarket", "afterhours"), default=["premarket", "afterhours"],
+                    help="Sessions to research (default: both)")
     bi.add_argument("--fetch-missing-quotes", action="store_true",
                     help="Download SIP quotes for triggered setups not covered by any cache (network; default: off)")
     bt = sub.add_parser("m2-backtest", help="Simulate the breakout strategy against historical SIP quotes (no orders).")
@@ -292,7 +294,8 @@ def _bullflag_intrabar(args: argparse.Namespace) -> int:
         return EXIT_USAGE
     result = {"dataset": Path(args.dataset).as_posix(), "code_sha": code_version(),
               "created_at_utc": datetime.now(timezone.utc).isoformat(),
-              **bullflag_intrabar.run_research(dataset, out, quote_cache=qc, source=source)}
+              **bullflag_intrabar.run_research(dataset, out, quote_cache=qc, source=source,
+                                               sessions=tuple(args.sessions))}
     path = Path(args.summary)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8", newline="\n")

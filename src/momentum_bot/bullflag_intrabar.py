@@ -547,7 +547,8 @@ def fetch_missing(setups: Iterable[Setup], bars_by: Mapping[tuple[str, str, str]
 
 
 def run_research(dataset: Path, out_dir: Path, sample: str = "in_sample", log=print,  # noqa: ANN001
-                 quote_cache: Path | None = None, source: object | None = None) -> dict[str, object]:
+                 quote_cache: Path | None = None, source: object | None = None,
+                 sessions: tuple[str, ...] = EXTENDED_SESSIONS) -> dict[str, object]:
     """Detect setups on every in-sample session and backtest both variants under the base and the
     predeclared stress assumptions. Reads the dataset and its quote cache, never writing to either.
     ``quote_cache`` is an extra, research-only quote cache outside the dataset; with ``source`` the
@@ -565,6 +566,8 @@ def run_research(dataset: Path, out_dir: Path, sample: str = "in_sample", log=pr
     index = QuoteIndex(dataset / "cache" / "backtest_quotes", *([quote_cache] if quote_cache else []))
     p = IntrabarParams()
     fetched = {"windows_fetched": 0, "windows_failed": 0}
+    if not set(sessions) <= set(EXTENDED_SESSIONS):
+        raise ValueError(f"sessions must be among {EXTENDED_SESSIONS}")
     missing: list[str] = []
     results: dict[tuple[str, str], list[Result]] = defaultdict(list)
     counts: Counter[str] = Counter()
@@ -574,7 +577,7 @@ def run_research(dataset: Path, out_dir: Path, sample: str = "in_sample", log=pr
         windows = session_windows(date.fromisoformat(d))
         setups: list[Setup] = []
         bars_by: dict[tuple[str, str, str], list[Bar]] = {}
-        for session in EXTENDED_SESSIONS:
+        for session in sessions:  # a session left out is neither detected, fetched nor traded
             bars = research.load_session_bars(dataset, d, session, as_of)
             if bars is None:
                 missing.append(f"{d} {session}")
@@ -619,7 +622,7 @@ def run_research(dataset: Path, out_dir: Path, sample: str = "in_sample", log=pr
         summary[k] = entry
     research.write_table(out_dir / "setups.csv.gz", setup_rows)
     after = sha256_files(_inputs(dataset, set(days)))
-    return {"sample": sample, "days": len(days), "sessions_missing_bars": missing, "orders_placed": 0,
+    return {"sample": sample, "days": len(days), "sessions": list(sessions), "sessions_missing_bars": missing, "orders_placed": 0,
             "network_requests": getattr(source, "request_count", 0), "research_quote_cache": fetched,
             "trade_prints_cached": False,
             "params": {k: (str(v) if isinstance(v, timedelta) else v) for k, v in asdict(p).items()},
