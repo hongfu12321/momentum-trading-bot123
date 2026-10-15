@@ -274,3 +274,9 @@ def test_fetch_missing_downloads_only_uncovered_triggered_setups_into_a_separate
     assert not (tmp_path / "dataset_cache").exists() and len(list(cache.glob("*.jsonl.gz"))) == 1
     again = bi.fetch_missing([sets[0]], {("FLG", str(DAY), "premarket"): bars}, bi.QuoteIndex(cache), cache, src)
     assert again["windows_fetched"] == 0 and src.request_count == 1  # covered now: no second request
+
+
+def test_untriggered_setups_are_reported_not_dropped() -> None:
+    bars = pattern()[:8] + [ob("04:08", 2.09, 2.11, 2.09, 2.10, 30_000)]  # never above candle 7's High
+    res = bi.run_portfolio(bi.detect_setups("FLG", bars, PM), {("FLG", str(DAY), "premarket"): bars}, None, BASE)
+    assert res and {(r.outcome, r.mode) for r in res} == {("no_trigger", "ohlc_approx")}

@@ -393,26 +393,29 @@ class _Day:
 def run_portfolio(setups: Iterable[Setup], bars: Mapping[tuple[str, str, str], list[Bar]], index: QuoteIndex | None,
                   cfg: ExecConfig, p: IntrabarParams = IntrabarParams(), risk: RiskConfig = RiskConfig(),
                   ohlc_cost_bps: float | None = None) -> list[Result]:
-    """Chronological: one position at a time, the existing daily limits, a setup consumed once."""
+    """Chronological: one position at a time, the existing daily limits, a setup consumed once.
+    Quotes are read when needed and not kept: only trigger times are held for all setups."""
     cost = p.ohlc_cost_bps if ohlc_cost_bps is None else ohlc_cost_bps
-    events: list[tuple[datetime, str, Setup, list[Quote] | None, int | None, str]] = []
+    events: list[tuple[datetime, str, Setup, tuple[datetime, datetime] | None, int | None, str]] = []
     out: list[Result] = []
     for s in setups:
         key = (s.symbol, s.trading_date, s.session)
         close = session_windows(date.fromisoformat(s.trading_date))[s.session].end_utc
         a, b = _quote_window(s, close, p)
-        quotes = index.load(s.symbol, a, b) if index is not None and index.covers(s.symbol, a, b) else None
+        covered = index is not None and index.covers(s.symbol, a, b)
+        quotes = index.load(s.symbol, a, b) if covered else None  # type: ignore[union-attr]
         t, why, k = first_trigger(s, bars[key], quotes)
+        del quotes
         if t is None:
             out.append(Result(s.setup_id, s.symbol, s.trading_date, s.session,
-                              "nbbo_proxy" if quotes is not None else "ohlc_approx",
-                              "proxy" if quotes is not None else "approximate",
+                              "nbbo_proxy" if covered else "ohlc_approx",
+                              "proxy" if covered else "approximate",
                               "invalidated" if why == "closed_below_reference_low" else "no_trigger", why))
             continue
-        events.append((t, s.setup_id, s, quotes, k, "nbbo_proxy" if quotes is not None else "ohlc_approx"))
+        events.append((t, s.setup_id, s, (a, b) if covered else None, k, "nbbo_proxy" if covered else "ohlc_approx"))
     days: dict[str, _Day] = defaultdict(_Day)
     busy: datetime | None = None
-    for t, _, s, quotes, k, mode in sorted(events, key=lambda e: (e[0], e[1])):
+    for t, _, s, span, k, mode in sorted(events, key=lambda e: (e[0], e[1])):
         day = days[s.trading_date]
         close = session_windows(date.fromisoformat(s.trading_date))[s.session].end_utc
         skip = ("after_entry_cutoff" if t > close - p.entry_cutoff_before_close else
@@ -425,7 +428,8 @@ def run_portfolio(setups: Iterable[Setup], bars: Mapping[tuple[str, str, str], l
                               "proxy" if mode == "nbbo_proxy" else "approximate", "skipped", skip, t.isoformat()))
             continue
         bs = bars[(s.symbol, s.trading_date, s.session)]
-        res = (simulate_nbbo(s, t, bs, quotes, cfg, p, risk) if quotes is not None
+        res = (simulate_nbbo(s, t, bs, index.load(s.symbol, *span), cfg, p, risk)  # type: ignore[union-attr]
+               if span is not None
                else simulate_ohlc(s, k, bs, cfg, p, risk, cost))  # type: ignore[arg-type]
         out.append(res)
         if res.outcome != "traded":
@@ -558,11 +562,16 @@ def run_research(dataset: Path, out_dir: Path, sample: str = "in_sample", log=pr
     refs = research.load_references(dataset)
     index = QuoteIndex(dataset / "cache" / "backtest_quotes", *([quote_cache] if quote_cache else []))
     p = IntrabarParams()
-    setups: list[Setup] = []
-    bars_by: dict[tuple[str, str, str], list[Bar]] = {}
+    fetched = {"windows_fetched": 0, "windows_failed": 0}
     missing: list[str] = []
-    for d in days:
+    results: dict[tuple[str, str], list[Result]] = defaultdict(list)
+    counts: Counter[str] = Counter()
+    covered: Counter[str] = Counter()
+    setup_rows: list[dict[str, object]] = []
+    for d in days:  # one trading day at a time: its bars and quotes are released before the next day
         windows = session_windows(date.fromisoformat(d))
+        setups: list[Setup] = []
+        bars_by: dict[tuple[str, str, str], list[Bar]] = {}
         for session in EXTENDED_SESSIONS:
             bars = research.load_session_bars(dataset, d, session, as_of)
             if bars is None:
@@ -579,27 +588,34 @@ def run_research(dataset: Path, out_dir: Path, sample: str = "in_sample", log=pr
                 if found:
                     bars_by[(sym, d, session)] = bars[sym]
                     setups += found
-        log(f"{d}: {len(setups)} setups")
-    fetched = (fetch_missing(setups, bars_by, index, quote_cache, source, p)
-               if source is not None and quote_cache is not None else {"windows_fetched": 0, "windows_failed": 0})
-    log(f"quotes: {fetched}")
-    cover = {st.setup_id: index.covers(st.symbol, *_quote_window(
-        st, session_windows(date.fromisoformat(st.trading_date))[st.session].end_utc, p)) for st in setups}
-    variants = {"bf_intrabar": setups, "top5_bf_intrabar": [x for x in setups if x.top5_rank is not None]}
+            del bars
+        if source is not None and quote_cache is not None:
+            got = fetch_missing(setups, bars_by, index, quote_cache, source, p)
+            fetched = {k: fetched[k] + got[k] for k in fetched}
+        cover = {st.setup_id: index.covers(st.symbol, *_quote_window(st, windows[st.session].end_utc, p))
+                 for st in setups}
+        # positions are flat by each session's end, so per-day portfolios equal one run over all days
+        for k, sts in {"bf_intrabar": setups, "top5_bf_intrabar": [x for x in setups if x.top5_rank is not None]}.items():
+            counts[k] += len(sts)
+            covered[k] += sum(cover[x.setup_id] for x in sts)
+            for name, (cfg, cost) in scenarios().items():
+                results[(k, name)] += run_portfolio(sts, bars_by, index, cfg, p, ohlc_cost_bps=cost)
+        setup_rows += [{"setup_id": x.setup_id, "symbol": x.symbol, "trading_date": x.trading_date,
+                        "session": x.session, "known_utc": x.known_utc.isoformat(),
+                        "expires_utc": x.expires_utc.isoformat(), "level": x.level, "stop": x.stop,
+                        "top5_rank": x.top5_rank, "nbbo_covered": cover[x.setup_id], **x.detail} for x in setups]
+        log(f"{d}: {counts['bf_intrabar']} setups so far; quotes {fetched}")
     out_dir.mkdir(parents=True, exist_ok=True)
     summary: dict[str, object] = {}
-    for k, sts in variants.items():
-        entry: dict[str, object] = {"label": LABELS[k], "quote_coverage": {
-            "setups": len(sts), "nbbo_covered": sum(cover[x.setup_id] for x in sts)}}
-        for name, (cfg, cost) in scenarios().items():
-            res = run_portfolio(sts, bars_by, index, cfg, p, ohlc_cost_bps=cost)
-            entry[name] = summarize(res, len(sts))
+    for k in STRATEGIES:
+        entry: dict[str, object] = {"label": LABELS[k], "quote_coverage": {"setups": counts[k],
+                                                                           "nbbo_covered": covered[k]}}
+        for name in scenarios():
+            res = results[(k, name)]
+            entry[name] = summarize(res, counts[k])
             research.write_table(out_dir / f"{k}_{name}_results.csv", result_rows(res))  # type: ignore[arg-type]
         summary[k] = entry
-    research.write_table(out_dir / "setups.csv.gz", [
-        {"setup_id": x.setup_id, "symbol": x.symbol, "trading_date": x.trading_date, "session": x.session,
-         "known_utc": x.known_utc.isoformat(), "expires_utc": x.expires_utc.isoformat(), "level": x.level,
-         "stop": x.stop, "top5_rank": x.top5_rank, "nbbo_covered": cover[x.setup_id], **x.detail} for x in setups])
+    research.write_table(out_dir / "setups.csv.gz", setup_rows)
     after = sha256_files(_inputs(dataset, set(days)))
     return {"sample": sample, "days": len(days), "sessions_missing_bars": missing, "orders_placed": 0,
             "network_requests": getattr(source, "request_count", 0), "research_quote_cache": fetched,
