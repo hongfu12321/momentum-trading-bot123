@@ -153,6 +153,8 @@ class QuoteIndex:
 
     def __init__(self, *cache_dirs: Path) -> None:
         self.files: dict[str, list[tuple[datetime, datetime, Path]]] = defaultdict(list)
+        self._memo: dict[tuple[str, datetime, datetime], list[Quote]] = {}  # decoded windows; see forget()
+        self._rows: dict[Path, tuple[list[tuple[datetime, tuple, Quote]], list[datetime]]] = {}  # parsed files
         found = [f for d in cache_dirs if d.is_dir() for f in d.glob("*.jsonl.gz")]
         for f in sorted(found):
             try:
@@ -176,12 +178,42 @@ class QuoteIndex:
         return t >= end
 
     def load(self, symbol: str, start: datetime, end: datetime) -> list[Quote]:
-        rows: list[Mapping[str, object]] = []
+        """Decoded once and reused: the trigger check and every variant and scenario read the same window."""
+        key = (symbol, start, end)
+        if key not in self._memo:
+            self._memo[key] = self._read(symbol, start, end)
+        return self._memo[key]
+
+    def forget(self) -> None:
+        """Release decoded windows (the runner calls this after each trading day)."""
+        self._memo.clear()
+        self._rows.clear()
+
+    def _parsed(self, f: Path) -> tuple[list[tuple[datetime, tuple, Quote]], list[datetime]]:
+        """A file's quotes, parsed once and stably sorted by time (file order kept at equal times)."""
+        if f not in self._rows:
+            with gzip.open(f, "rt", encoding="utf-8") as fh:
+                raw = [json.loads(line) for line in fh]
+            items = [(t, (t, r.get("bp"), r.get("ap"), r.get("bs"), r.get("as")), parse_quote(r))
+                     for r in raw for t in (datetime.fromisoformat(str(r["t"])),)]
+            items.sort(key=lambda x: x[0])
+            self._rows[f] = (items, [x[0] for x in items])
+        return self._rows[f]
+
+    def _read(self, symbol: str, start: datetime, end: datetime) -> list[Quote]:
+        """Same result as quotes.clean_quotes over the overlapping files: quotes in [start, end), exact
+        duplicate rows removed (first file wins), stably sorted by time."""
+        seen: set[tuple] = set()
+        out: list[tuple[datetime, Quote]] = []
         for a, b, f in self.files.get(symbol, []):
             if a < end and b > start:
-                with gzip.open(f, "rt", encoding="utf-8") as fh:
-                    rows += [json.loads(line) for line in fh]
-        return [parse_quote(r) for r in clean_quotes(rows, start, end)]
+                items, times = self._parsed(f)
+                for t, key, q in items[bisect.bisect_left(times, start) : bisect.bisect_left(times, end)]:
+                    if key not in seen:
+                        seen.add(key)
+                        out.append((t, q))
+        out.sort(key=lambda x: x[0])
+        return [q for _, q in out]
 
 
 
@@ -609,6 +641,7 @@ def run_research(dataset: Path, out_dir: Path, sample: str = "in_sample", log=pr
                         "session": x.session, "known_utc": x.known_utc.isoformat(),
                         "expires_utc": x.expires_utc.isoformat(), "level": x.level, "stop": x.stop,
                         "top5_rank": x.top5_rank, "nbbo_covered": cover[x.setup_id], **x.detail} for x in setups]
+        index.forget()
         log(f"{d}: {counts['bf_intrabar']} setups so far; quotes {fetched}")
     out_dir.mkdir(parents=True, exist_ok=True)
     summary: dict[str, object] = {}
