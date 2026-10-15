@@ -161,6 +161,8 @@ class QuoteIndex:
                 b = datetime.combine(a.date(), datetime.strptime(end, "%H%M%S").time(), _UTC)
             except ValueError:
                 continue
+            if b <= a:  # the name holds only the end's time of day: a window ending at or past midnight UTC
+                b += timedelta(days=1)
             if b > a:
                 self.files[sym].append((a, b, f))
 

@@ -280,3 +280,12 @@ def test_untriggered_setups_are_reported_not_dropped() -> None:
     bars = pattern()[:8] + [ob("04:08", 2.09, 2.11, 2.09, 2.10, 30_000)]  # never above candle 7's High
     res = bi.run_portfolio(bi.detect_setups("FLG", bars, PM), {("FLG", str(DAY), "premarket"): bars}, None, BASE)
     assert res and {(r.outcome, r.mode) for r in res} == {("no_trigger", "ohlc_approx")}
+
+
+def test_quote_index_reads_windows_that_end_at_midnight_utc(tmp_path) -> None:  # noqa: ANN001
+    import gzip
+
+    (tmp_path / "AH_20260612T234157_000000.jsonl.gz").write_bytes(gzip.compress(b""))  # after hours: 19:41 to 20:00 ET
+    qi = bi.QuoteIndex(tmp_path)
+    start = et(date(2026, 6, 12), "19:41") + timedelta(seconds=57)
+    assert qi.covers("AH", start, et(date(2026, 6, 12), "20:00"))
