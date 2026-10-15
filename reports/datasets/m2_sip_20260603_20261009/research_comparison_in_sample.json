@@ -1,0 +1,731 @@
+{
+  "dataset": "reports\\datasets\\m2_sip_20260603_20261009",
+  "code_sha": "c57c967",
+  "created_at_utc": "2026-10-14T16:50:43.999915+00:00",
+  "quote_api_requests": 1148,
+  "sample": "in_sample",
+  "scenario": "base_cap50",
+  "orders_placed": 0,
+  "status": "exploratory hypotheses (in-sample only); not validated",
+  "sessions": {
+    "total": 118,
+    "with_bars": 118,
+    "missing_bars": []
+  },
+  "top5": {
+    "universe": "cached_eligible_sub20",
+    "universe_limit": "Ranked universe = symbols the dataset fetched bars for (reference close below about $18.2 premarket / $19.0 after hours), filtered to the $1-$20 scan band and 100k session volume. Symbols outside it are absent, so this is not the market-wide top-gainers list.",
+    "mean_eligible_symbols": 3435.7118644067796,
+    "mean_symbols_with_bars": 2457.322033898305,
+    "minutes": 33630,
+    "minutes_with_fewer_than_5_ranked": 109,
+    "mean_distinct_members_per_session": 25.26271186440678,
+    "max_staleness_minutes": 5,
+    "stale_exclusion_symbol_minutes": 737692
+  },
+  "bull_flag": {
+    "params": {
+      "pole_min_gain": 0.05,
+      "pole_min_bars": 3,
+      "pole_max_bars": 10,
+      "flag_min_bars": 2,
+      "flag_max_bars": 8,
+      "max_pullback": 0.5,
+      "breakout_volume_multiple": 1.5,
+      "exclude_closing_auction_bar": true
+    },
+    "attempts_evaluated": 126651,
+    "qualified": 1435,
+    "qualified_in_top5_and_gated": 875,
+    "first_failed_rule": {
+      "failed_flagpole": 57893,
+      "failed_complete_bars": 48562,
+      "failed_pullback": 7938,
+      "failed_consolidation": 5024,
+      "insufficient_history": 3790,
+      "qualified": 1435,
+      "failed_breakout_close": 1053,
+      "failed_breakout_volume": 613,
+      "failed_volume_contraction": 343
+    }
+  },
+  "strategies": {
+    "hos": {
+      "label": "Original HOS Breakout",
+      "signals_to_backtest": 3159,
+      "filtered_before_backtest": {},
+      "results": {
+        "premarket": {
+          "signals": 1622,
+          "skipped": {
+            "position_open": 50,
+            "daily_loss_limit": 305,
+            "daily_entry_limit": 295,
+            "loss_streak_pause": 161,
+            "after_entry_cutoff": 5
+          },
+          "orders_simulated": 806,
+          "non_fills": {
+            "at_signal_spread_above_cap": 523,
+            "at_signal_no_quote": 41,
+            "at_signal_locked_quote": 12,
+            "timeout_spread_above_cap": 11,
+            "timeout_price_above_limit": 5
+          },
+          "fill_rate": 0.2655086848635236,
+          "partial_fills": 4,
+          "median_seconds_to_fill": 0.5,
+          "median_entry_spread_bps": 35.555808396860535,
+          "median_entry_vs_signal_close_bps": 0.2967099422168662,
+          "entries": 214,
+          "trades": 214,
+          "win_rate": 0.2897196261682243,
+          "gross_usd": -629.8400000000006,
+          "fees_usd": 7.522925878,
+          "net_usd": -637.3629258780006,
+          "expectancy_usd": -2.9783314293364516,
+          "expectancy_r": -0.19375372903289126,
+          "expectancy_r_ci95_bootstrap": [
+            -0.39339194923139065,
+            0.026838995248605318
+          ],
+          "profit_factor": 0.7446372398022298,
+          "avg_win_usd": 29.976594707258055,
+          "avg_loss_usd": -16.420472353473684,
+          "max_drawdown_usd": 661.7219444320003,
+          "exit_reasons": {
+            "stop": 138,
+            "target": 57,
+            "time": 19
+          },
+          "incomplete_exits": {
+            "count": 0,
+            "no_shares_sold": 0,
+            "shares_unsold": 0,
+            "realized_net_usd": 0,
+            "unrealized_mark_usd": 0,
+            "unmarked": 0
+          }
+        },
+        "afterhours": {
+          "signals": 1537,
+          "skipped": {
+            "daily_loss_limit": 481,
+            "daily_entry_limit": 636,
+            "loss_streak_pause": 292,
+            "position_open": 9
+          },
+          "orders_simulated": 119,
+          "non_fills": {
+            "at_signal_spread_above_cap": 81,
+            "at_signal_no_quote": 13,
+            "timeout_spread_above_cap": 3
+          },
+          "fill_rate": 0.18487394957983194,
+          "partial_fills": 0,
+          "median_seconds_to_fill": 0.5,
+          "median_entry_spread_bps": 31.696994813448093,
+          "median_entry_vs_signal_close_bps": 0.2809155463778801,
+          "entries": 22,
+          "trades": 22,
+          "win_rate": 0.13636363636363635,
+          "gross_usd": -209.00000000000028,
+          "fees_usd": 0.75386826,
+          "net_usd": -209.75386826000027,
+          "expectancy_usd": -9.534266739090922,
+          "expectancy_r": -0.6421245825852971,
+          "expectancy_r_ci95_bootstrap": [
+            -1.053586781026662,
+            -0.14320307927795695
+          ],
+          "profit_factor": 0.2992312443406735,
+          "avg_win_usd": 29.855265139333294,
+          "avg_loss_usd": -15.75366650936843,
+          "max_drawdown_usd": 209.75386826000033,
+          "exit_reasons": {
+            "time": 2,
+            "stop": 17,
+            "target": 3
+          },
+          "incomplete_exits": {
+            "count": 0,
+            "no_shares_sold": 0,
+            "shares_unsold": 0,
+            "realized_net_usd": 0,
+            "unrealized_mark_usd": 0,
+            "unmarked": 0
+          }
+        },
+        "all": {
+          "signals": 3159,
+          "skipped": {
+            "position_open": 59,
+            "daily_loss_limit": 786,
+            "daily_entry_limit": 931,
+            "loss_streak_pause": 453,
+            "after_entry_cutoff": 5
+          },
+          "orders_simulated": 925,
+          "non_fills": {
+            "at_signal_spread_above_cap": 604,
+            "at_signal_no_quote": 54,
+            "at_signal_locked_quote": 12,
+            "timeout_spread_above_cap": 14,
+            "timeout_price_above_limit": 5
+          },
+          "fill_rate": 0.25513513513513514,
+          "partial_fills": 4,
+          "median_seconds_to_fill": 0.5,
+          "median_entry_spread_bps": 34.752415458936454,
+          "median_entry_vs_signal_close_bps": 0.2967099422168662,
+          "entries": 236,
+          "trades": 236,
+          "win_rate": 0.2754237288135593,
+          "gross_usd": -838.8400000000008,
+          "fees_usd": 8.276794138,
+          "net_usd": -847.1167941380008,
+          "expectancy_usd": -3.5894779412627154,
+          "expectancy_r": -0.23555101199116638,
+          "expectancy_r_ci95_bootstrap": [
+            -0.4280904931354251,
+            -0.03595036950567965
+          ],
+          "profit_factor": 0.6969421653146743,
+          "avg_win_usd": 29.970994881046142,
+          "avg_loss_usd": -16.346382815239767,
+          "max_drawdown_usd": 871.4758126920008,
+          "exit_reasons": {
+            "stop": 155,
+            "target": 60,
+            "time": 21
+          },
+          "incomplete_exits": {
+            "count": 0,
+            "no_shares_sold": 0,
+            "shares_unsold": 0,
+            "realized_net_usd": 0,
+            "unrealized_mark_usd": 0,
+            "unmarked": 0
+          }
+        }
+      }
+    },
+    "top5_hos": {
+      "label": "Top 5 (cached universe) HOS Breakout",
+      "signals_to_backtest": 2148,
+      "filtered_before_backtest": {
+        "not_in_top5": 1011
+      },
+      "results": {
+        "premarket": {
+          "signals": 1013,
+          "skipped": {
+            "position_open": 17,
+            "daily_loss_limit": 80,
+            "daily_entry_limit": 118,
+            "loss_streak_pause": 107,
+            "after_entry_cutoff": 4
+          },
+          "orders_simulated": 687,
+          "non_fills": {
+            "at_signal_spread_above_cap": 442,
+            "at_signal_locked_quote": 12,
+            "timeout_price_above_limit": 6,
+            "timeout_spread_above_cap": 12,
+            "at_signal_no_quote": 17
+          },
+          "fill_rate": 0.28820960698689957,
+          "partial_fills": 2,
+          "median_seconds_to_fill": 0.5,
+          "median_entry_spread_bps": 33.89840246596577,
+          "median_entry_vs_signal_close_bps": 0.0,
+          "entries": 198,
+          "trades": 198,
+          "win_rate": 0.30303030303030304,
+          "gross_usd": -395.9179,
+          "fees_usd": 6.89020369,
+          "net_usd": -402.80810369,
+          "expectancy_usd": -2.034384362070707,
+          "expectancy_r": -0.1337487467710464,
+          "expectancy_r_ci95_bootstrap": [
+            -0.34669159989797005,
+            0.08435464784220195
+          ],
+          "profit_factor": 0.8251295171027008,
+          "avg_win_usd": 31.677621305399995,
+          "avg_loss_usd": -16.69177813053623,
+          "max_drawdown_usd": 548.236109802,
+          "exit_reasons": {
+            "stop": 131,
+            "target": 58,
+            "time": 9
+          },
+          "incomplete_exits": {
+            "count": 0,
+            "no_shares_sold": 0,
+            "shares_unsold": 0,
+            "realized_net_usd": 0,
+            "unrealized_mark_usd": 0,
+            "unmarked": 0
+          }
+        },
+        "afterhours": {
+          "signals": 1135,
+          "skipped": {
+            "daily_entry_limit": 469,
+            "daily_loss_limit": 216,
+            "loss_streak_pause": 227,
+            "position_open": 9
+          },
+          "orders_simulated": 214,
+          "non_fills": {
+            "at_signal_spread_above_cap": 155,
+            "at_signal_no_quote": 14,
+            "timeout_spread_above_cap": 3
+          },
+          "fill_rate": 0.19626168224299065,
+          "partial_fills": 0,
+          "median_seconds_to_fill": 0.5,
+          "median_entry_spread_bps": 37.314601774532115,
+          "median_entry_vs_signal_close_bps": 0.09842713439178752,
+          "entries": 42,
+          "trades": 42,
+          "win_rate": 0.14285714285714285,
+          "gross_usd": -402.8800000000001,
+          "fees_usd": 1.54819491,
+          "net_usd": -404.4281949100001,
+          "expectancy_usd": -9.629242735952383,
+          "expectancy_r": -0.648282093359039,
+          "expectancy_r_ci95_bootstrap": [
+            -0.9821646758100325,
+            -0.26891331539739505
+          ],
+          "profit_factor": 0.3176706659113467,
+          "avg_win_usd": 31.381467269999963,
+          "avg_loss_usd": -16.464361070277775,
+          "max_drawdown_usd": 413.0929891079999,
+          "exit_reasons": {
+            "stop": 35,
+            "target": 6,
+            "time": 1
+          },
+          "incomplete_exits": {
+            "count": 0,
+            "no_shares_sold": 0,
+            "shares_unsold": 0,
+            "realized_net_usd": 0,
+            "unrealized_mark_usd": 0,
+            "unmarked": 0
+          }
+        },
+        "all": {
+          "signals": 2148,
+          "skipped": {
+            "position_open": 26,
+            "daily_entry_limit": 587,
+            "daily_loss_limit": 296,
+            "loss_streak_pause": 334,
+            "after_entry_cutoff": 4
+          },
+          "orders_simulated": 901,
+          "non_fills": {
+            "at_signal_spread_above_cap": 597,
+            "at_signal_locked_quote": 12,
+            "timeout_price_above_limit": 6,
+            "timeout_spread_above_cap": 15,
+            "at_signal_no_quote": 31
+          },
+          "fill_rate": 0.2663706992230855,
+          "partial_fills": 2,
+          "median_seconds_to_fill": 0.5,
+          "median_entry_spread_bps": 34.542726489021994,
+          "median_entry_vs_signal_close_bps": 0.0,
+          "entries": 240,
+          "trades": 240,
+          "win_rate": 0.275,
+          "gross_usd": -798.7979,
+          "fees_usd": 8.4383986,
+          "net_usd": -807.2362986,
+          "expectancy_usd": -3.3634845775000004,
+          "expectancy_r": -0.22379208242394508,
+          "expectancy_r_ci95_bootstrap": [
+            -0.4208399154612838,
+            -0.017136118641470282
+          ],
+          "profit_factor": 0.7212757373213582,
+          "avg_win_usd": 31.650698211272722,
+          "avg_loss_usd": -16.644726324965514,
+          "max_drawdown_usd": 834.0769906620001,
+          "exit_reasons": {
+            "stop": 166,
+            "target": 64,
+            "time": 10
+          },
+          "incomplete_exits": {
+            "count": 0,
+            "no_shares_sold": 0,
+            "shares_unsold": 0,
+            "realized_net_usd": 0,
+            "unrealized_mark_usd": 0,
+            "unmarked": 0
+          }
+        }
+      }
+    },
+    "top5_bullflag": {
+      "label": "Top 5 (cached universe) + Bull Flag Breakout",
+      "signals_to_backtest": 875,
+      "filtered_before_backtest": {
+        "failed_consolidation": 3598,
+        "failed_pullback": 4977,
+        "failed_flagpole": 22040,
+        "failed_complete_bars": 4961,
+        "failed_volume_contraction": 195,
+        "insufficient_history": 817,
+        "failed_breakout_volume": 302,
+        "failed_breakout_close": 564,
+        "not_in_top5": 547,
+        "candidate_gate_failed": 13
+      },
+      "results": {
+        "premarket": {
+          "signals": 500,
+          "skipped": {
+            "position_open": 28,
+            "loss_streak_pause": 19,
+            "daily_loss_limit": 11,
+            "after_entry_cutoff": 17,
+            "daily_entry_limit": 18
+          },
+          "orders_simulated": 407,
+          "non_fills": {
+            "at_signal_spread_above_cap": 231,
+            "timeout_price_above_limit": 8,
+            "at_signal_locked_quote": 13,
+            "at_signal_no_quote": 13,
+            "timeout_spread_above_cap": 2
+          },
+          "fill_rate": 0.343980343980344,
+          "partial_fills": 1,
+          "median_seconds_to_fill": 0.5,
+          "median_entry_spread_bps": 32.54697993686505,
+          "median_entry_vs_signal_close_bps": 0.918062053766322,
+          "entries": 140,
+          "trades": 140,
+          "win_rate": 0.29285714285714287,
+          "gross_usd": -349.7200000000001,
+          "fees_usd": 4.960065874,
+          "net_usd": -354.6800658740001,
+          "expectancy_usd": -2.5334290419571435,
+          "expectancy_r": -0.16761737759466266,
+          "expectancy_r_ci95_bootstrap": [
+            -0.38379426510824793,
+            0.06700710315461979
+          ],
+          "profit_factor": 0.769639430142843,
+          "avg_win_usd": 28.902278989121953,
+          "avg_loss_usd": -15.55225762048485,
+          "max_drawdown_usd": 439.8624127899997,
+          "exit_reasons": {
+            "target": 38,
+            "stop": 94,
+            "session_end": 1,
+            "time": 7
+          },
+          "incomplete_exits": {
+            "count": 0,
+            "no_shares_sold": 0,
+            "shares_unsold": 0,
+            "realized_net_usd": 0,
+            "unrealized_mark_usd": 0,
+            "unmarked": 0
+          }
+        },
+        "afterhours": {
+          "signals": 375,
+          "skipped": {
+            "loss_streak_pause": 38,
+            "daily_loss_limit": 81,
+            "daily_entry_limit": 52,
+            "after_entry_cutoff": 4,
+            "position_open": 7
+          },
+          "orders_simulated": 193,
+          "non_fills": {
+            "at_signal_spread_above_cap": 124,
+            "timeout_spread_above_cap": 3,
+            "at_signal_no_quote": 14,
+            "at_signal_locked_quote": 3
+          },
+          "fill_rate": 0.2538860103626943,
+          "partial_fills": 0,
+          "median_seconds_to_fill": 0.5,
+          "median_entry_spread_bps": 37.383177570094325,
+          "median_entry_vs_signal_close_bps": 6.4977257959708545,
+          "entries": 49,
+          "trades": 49,
+          "win_rate": 0.2653061224489796,
+          "gross_usd": -247.28000000000043,
+          "fees_usd": 1.64166747,
+          "net_usd": -248.92166747000044,
+          "expectancy_usd": -5.080034030000009,
+          "expectancy_r": -0.340081019183505,
+          "expectancy_r_ci95_bootstrap": [
+            -0.6939095546564431,
+            0.04749976583624385
+          ],
+          "profit_factor": 0.5862491199260833,
+          "avg_win_usd": 27.13080140969228,
+          "avg_loss_usd": -16.711724605444445,
+          "max_drawdown_usd": 277.24376491400045,
+          "exit_reasons": {
+            "stop": 33,
+            "target": 12,
+            "time": 4
+          },
+          "incomplete_exits": {
+            "count": 0,
+            "no_shares_sold": 0,
+            "shares_unsold": 0,
+            "realized_net_usd": 0,
+            "unrealized_mark_usd": 0,
+            "unmarked": 0
+          }
+        },
+        "all": {
+          "signals": 875,
+          "skipped": {
+            "position_open": 35,
+            "loss_streak_pause": 57,
+            "daily_loss_limit": 92,
+            "after_entry_cutoff": 21,
+            "daily_entry_limit": 70
+          },
+          "orders_simulated": 600,
+          "non_fills": {
+            "at_signal_spread_above_cap": 355,
+            "timeout_price_above_limit": 8,
+            "at_signal_locked_quote": 16,
+            "timeout_spread_above_cap": 5,
+            "at_signal_no_quote": 27
+          },
+          "fill_rate": 0.315,
+          "partial_fills": 1,
+          "median_seconds_to_fill": 0.5,
+          "median_entry_spread_bps": 33.72681281618965,
+          "median_entry_vs_signal_close_bps": 1.683785149015904,
+          "entries": 189,
+          "trades": 189,
+          "win_rate": 0.2857142857142857,
+          "gross_usd": -597.0000000000005,
+          "fees_usd": 6.601733344,
+          "net_usd": -603.6017333440005,
+          "expectancy_usd": -3.1936599647830715,
+          "expectancy_r": -0.21233017356214032,
+          "expectancy_r_ci95_bootstrap": [
+            -0.41865968006149823,
+            -0.015468598913432115
+          ],
+          "profit_factor": 0.7181137736892934,
+          "avg_win_usd": 28.475812164444438,
+          "avg_loss_usd": -15.861448816474075,
+          "max_drawdown_usd": 688.2501650540006,
+          "exit_reasons": {
+            "target": 50,
+            "stop": 127,
+            "time": 11,
+            "session_end": 1
+          },
+          "incomplete_exits": {
+            "count": 0,
+            "no_shares_sold": 0,
+            "shares_unsold": 0,
+            "realized_net_usd": 0,
+            "unrealized_mark_usd": 0,
+            "unmarked": 0
+          }
+        }
+      }
+    },
+    "bullflag": {
+      "label": "Bull Flag Breakout (no Top 5 filter)",
+      "signals_to_backtest": 1140,
+      "filtered_before_backtest": {},
+      "results": {
+        "premarket": {
+          "signals": 685,
+          "skipped": {
+            "position_open": 38,
+            "loss_streak_pause": 34,
+            "daily_loss_limit": 29,
+            "after_entry_cutoff": 31,
+            "daily_entry_limit": 37
+          },
+          "orders_simulated": 516,
+          "non_fills": {
+            "at_signal_spread_above_cap": 300,
+            "at_signal_no_quote": 37,
+            "timeout_price_above_limit": 7,
+            "at_signal_locked_quote": 15,
+            "timeout_stale_quote": 1,
+            "timeout_spread_above_cap": 5
+          },
+          "fill_rate": 0.2926356589147287,
+          "partial_fills": 2,
+          "median_seconds_to_fill": 0.5,
+          "median_entry_spread_bps": 32.948929159803065,
+          "median_entry_vs_signal_close_bps": 1.4287755393627144,
+          "entries": 151,
+          "trades": 151,
+          "win_rate": 0.271523178807947,
+          "gross_usd": -531.8,
+          "fees_usd": 5.416697886,
+          "net_usd": -537.216697886,
+          "expectancy_usd": -3.5577264760662253,
+          "expectancy_r": -0.23701657292495462,
+          "expectancy_r_ci95_bootstrap": [
+            -0.44017228199318953,
+            -0.011312592598696635
+          ],
+          "profit_factor": 0.6850224293482726,
+          "avg_win_usd": 28.496453186536584,
+          "avg_loss_usd": -15.50519344121818,
+          "max_drawdown_usd": 575.3915929179996,
+          "exit_reasons": {
+            "target": 37,
+            "stop": 102,
+            "time": 10,
+            "session_end": 2
+          },
+          "incomplete_exits": {
+            "count": 0,
+            "no_shares_sold": 0,
+            "shares_unsold": 0,
+            "realized_net_usd": 0,
+            "unrealized_mark_usd": 0,
+            "unmarked": 0
+          }
+        },
+        "afterhours": {
+          "signals": 455,
+          "skipped": {
+            "loss_streak_pause": 80,
+            "daily_loss_limit": 101,
+            "daily_entry_limit": 55,
+            "after_entry_cutoff": 3,
+            "position_open": 8
+          },
+          "orders_simulated": 208,
+          "non_fills": {
+            "at_signal_spread_above_cap": 138,
+            "timeout_spread_above_cap": 2,
+            "at_signal_no_quote": 21,
+            "at_signal_locked_quote": 3
+          },
+          "fill_rate": 0.21153846153846154,
+          "partial_fills": 0,
+          "median_seconds_to_fill": 0.5,
+          "median_entry_spread_bps": 36.27144059770603,
+          "median_entry_vs_signal_close_bps": 4.78779795492601,
+          "entries": 44,
+          "trades": 44,
+          "win_rate": 0.20454545454545456,
+          "gross_usd": -347.04000000000025,
+          "fees_usd": 1.440222688,
+          "net_usd": -348.48022268800025,
+          "expectancy_usd": -7.920005061090915,
+          "expectancy_r": -0.5300754930874056,
+          "expectancy_r_ci95_bootstrap": [
+            -0.8582187209196213,
+            -0.16982123592037768
+          ],
+          "profit_factor": 0.3987128247072652,
+          "avg_win_usd": 25.675203251333304,
+          "avg_loss_usd": -16.55877291285714,
+          "max_drawdown_usd": 376.8023201320003,
+          "exit_reasons": {
+            "stop": 31,
+            "time": 5,
+            "target": 8
+          },
+          "incomplete_exits": {
+            "count": 0,
+            "no_shares_sold": 0,
+            "shares_unsold": 0,
+            "realized_net_usd": 0,
+            "unrealized_mark_usd": 0,
+            "unmarked": 0
+          }
+        },
+        "all": {
+          "signals": 1140,
+          "skipped": {
+            "position_open": 46,
+            "loss_streak_pause": 114,
+            "daily_loss_limit": 130,
+            "after_entry_cutoff": 34,
+            "daily_entry_limit": 92
+          },
+          "orders_simulated": 724,
+          "non_fills": {
+            "at_signal_spread_above_cap": 438,
+            "at_signal_no_quote": 58,
+            "timeout_price_above_limit": 7,
+            "at_signal_locked_quote": 18,
+            "timeout_stale_quote": 1,
+            "timeout_spread_above_cap": 7
+          },
+          "fill_rate": 0.26933701657458564,
+          "partial_fills": 2,
+          "median_seconds_to_fill": 0.5,
+          "median_entry_spread_bps": 33.72681281618965,
+          "median_entry_vs_signal_close_bps": 1.5812776723600486,
+          "entries": 195,
+          "trades": 195,
+          "win_rate": 0.2564102564102564,
+          "gross_usd": -878.8400000000003,
+          "fees_usd": 6.856920574,
+          "net_usd": -885.6969205740003,
+          "expectancy_usd": -4.542035490123078,
+          "expectancy_r": -0.30314268824366153,
+          "expectancy_r_ci95_bootstrap": [
+            -0.4815232365066801,
+            -0.11377322415816282
+          ],
+          "profit_factor": 0.612408236002043,
+          "avg_win_usd": 27.988628198199994,
+          "avg_loss_usd": -15.759505727475862,
+          "max_drawdown_usd": 939.1533251700005,
+          "exit_reasons": {
+            "target": 45,
+            "stop": 133,
+            "time": 15,
+            "session_end": 2
+          },
+          "incomplete_exits": {
+            "count": 0,
+            "no_shares_sold": 0,
+            "shares_unsold": 0,
+            "realized_net_usd": 0,
+            "unrealized_mark_usd": 0,
+            "unmarked": 0
+          }
+        }
+      }
+    }
+  },
+  "execution_consistency": {
+    "top5_hos": {
+      "common_evaluated_signals": 690,
+      "identical_outcomes": 690
+    },
+    "top5_bullflag": {
+      "common_evaluated_signals": 28,
+      "identical_outcomes": 28
+    },
+    "bullflag": {
+      "common_evaluated_signals": 33,
+      "identical_outcomes": 33
+    }
+  }
+}

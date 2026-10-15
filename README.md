@@ -54,109 +54,6 @@ cp .env.example .env               # then fill in Alpaca keys
 
 Keys can also be set as environment variables `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`; real environment variables take precedence over `.env`.
 
-## Command reference (macOS zsh and Windows PowerShell)
-
-Every command runs from the repository root. They call the virtual environment's executables directly, so nothing needs to be activated. `D` is the M2 dataset folder. Commands marked **API** call Alpaca's historical market-data API and need keys in `.env`. All others are offline. Nothing here places orders.
-
-### macOS (zsh)
-
-```zsh
-# setup (once)
-python3.12 -m venv .venv
-.venv/bin/pip install -e ".[dev,viewer]"
-cp .env.example .env                  # then fill in APCA_API_KEY_ID / APCA_API_SECRET_KEY
-D=reports/datasets/m2_sip_20260603_20261009
-
-# tests (offline, no credentials)
-.venv/bin/python -m pytest
-
-# fetch data (API)
-.venv/bin/momentum-bot m1-validate --symbols SOUN,MARA,PLUG --start 2024-03-04 --end 2024-03-08
-.venv/bin/momentum-bot m1-dataset --start 2026-06-03 --end 2026-10-09 --out-dir $D
-.venv/bin/momentum-bot m2-quote-probe --dataset $D --sample 60 --minutes 30
-
-# backtest (API for quotes not yet cached) and diagnostics (offline)
-.venv/bin/momentum-bot m2-backtest --dataset $D --sample in_sample --spread-caps 50,100,150,200
-.venv/bin/momentum-bot m2-backtest --dataset $D --sample out_of_sample --spread-caps 50 --confirm-out-of-sample
-.venv/bin/momentum-bot m2-diagnostics --dataset $D
-.venv/bin/momentum-bot m2-diagnostics --dataset $D --sample out_of_sample --confirm-out-of-sample
-
-# historical replay viewer (offline; opens http://127.0.0.1:8501, stop with Ctrl+C)
-.venv/bin/momentum-bot m2-viewer-check --dataset $D
-.venv/bin/momentum-bot m2-viewer --dataset $D
-.venv/bin/momentum-bot m2-chart --dataset $D --date 2026-10-09 --session premarket
-
-# viewer demo on synthetic data (offline; not real trades)
-mkdir -p reports/runs/viewer_demo
-(cd tests && ../.venv/bin/python -c "import pathlib; from test_viewer import replay_dataset; replay_dataset(pathlib.Path('../reports/runs/viewer_demo').resolve())")
-.venv/bin/momentum-bot m2-viewer --dataset reports/runs/viewer_demo
-
-# rclone and Google Drive (once; the browser opens to sign in)
-brew install rclone
-rclone config create gdrive drive scope=drive.file
-rclone mkdir gdrive:trading-research
-
-# dataset backup and restore
-.venv/bin/momentum-bot dataset-backup --dataset $D --remote gdrive:trading-research             # dry run
-.venv/bin/momentum-bot dataset-backup --dataset $D --remote gdrive:trading-research --confirm   # upload
-.venv/bin/momentum-bot dataset-list --remote gdrive:trading-research
-.venv/bin/momentum-bot dataset-restore --remote gdrive:trading-research --snapshot SNAPSHOT_ID --destination $D
-.venv/bin/momentum-bot dataset-verify --dataset $D
-```
-
-### Windows (PowerShell)
-
-```powershell
-# setup (once)
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev,viewer]"
-Copy-Item .env.example .env           # then fill in APCA_API_KEY_ID / APCA_API_SECRET_KEY
-$D = "reports\datasets\m2_sip_20260603_20261009"
-
-# tests (offline, no credentials)
-.\.venv\Scripts\python.exe -m pytest
-
-# fetch data (API)
-.\.venv\Scripts\momentum-bot.exe m1-validate --symbols SOUN,MARA,PLUG --start 2024-03-04 --end 2024-03-08
-.\.venv\Scripts\momentum-bot.exe m1-dataset --start 2026-06-03 --end 2026-10-09 --out-dir $D
-.\.venv\Scripts\momentum-bot.exe m2-quote-probe --dataset $D --sample 60 --minutes 30
-
-# backtest (API for quotes not yet cached) and diagnostics (offline)
-.\.venv\Scripts\momentum-bot.exe m2-backtest --dataset $D --sample in_sample --spread-caps 50,100,150,200
-.\.venv\Scripts\momentum-bot.exe m2-backtest --dataset $D --sample out_of_sample --spread-caps 50 --confirm-out-of-sample
-.\.venv\Scripts\momentum-bot.exe m2-diagnostics --dataset $D
-.\.venv\Scripts\momentum-bot.exe m2-diagnostics --dataset $D --sample out_of_sample --confirm-out-of-sample
-
-# historical replay viewer (offline; opens http://127.0.0.1:8501, stop with Ctrl+C)
-.\.venv\Scripts\momentum-bot.exe m2-viewer-check --dataset $D
-.\.venv\Scripts\momentum-bot.exe m2-viewer --dataset $D
-.\.venv\Scripts\momentum-bot.exe m2-chart --dataset $D --date 2026-10-09 --session premarket
-
-# viewer demo on synthetic data (offline; not real trades)
-New-Item -ItemType Directory -Force reports\runs\viewer_demo | Out-Null
-Push-Location tests
-..\.venv\Scripts\python.exe -c "import pathlib; from test_viewer import replay_dataset; replay_dataset(pathlib.Path('../reports/runs/viewer_demo').resolve())"
-Pop-Location
-.\.venv\Scripts\momentum-bot.exe m2-viewer --dataset reports\runs\viewer_demo
-
-# rclone and Google Drive (once; the browser opens to sign in; open a new terminal after installing)
-winget install Rclone.Rclone
-rclone config create gdrive drive scope=drive.file
-rclone mkdir gdrive:trading-research
-
-# dataset backup and restore
-.\.venv\Scripts\momentum-bot.exe dataset-backup --dataset $D --remote gdrive:trading-research             # dry run
-.\.venv\Scripts\momentum-bot.exe dataset-backup --dataset $D --remote gdrive:trading-research --confirm   # upload
-.\.venv\Scripts\momentum-bot.exe dataset-list --remote gdrive:trading-research
-.\.venv\Scripts\momentum-bot.exe dataset-restore --remote gdrive:trading-research --snapshot SNAPSHOT_ID --destination $D
-.\.venv\Scripts\momentum-bot.exe dataset-verify --dataset $D
-```
-
-Notes:
-- `m2-backtest` and `m2-diagnostics` for the out-of-sample block are report-only. Run them with the frozen settings, never to tune.
-- `dataset-restore` refuses an existing destination. Restore into a new folder, or move the old one away yourself first.
-- Details for each command are in the sections below and in `docs/`. The backup guide, including the licensing caveat, is `docs/dataset_backup_restore.md`.
-
 ## M1 command
 
 ```bash
@@ -213,23 +110,17 @@ momentum-bot m2-diagnostics --dataset reports/datasets/m2_sip_20260603_20261009 
 
 Replays only the cached backtest quotes and makes no network requests. It writes reason-coded signal and trade ledgers, MFE/MAE, post-entry moves, slippage and spread cost, and bucketed breakdowns with small-sample flags. Entry-time features are kept separate from post-entry diagnostics. The aggregate report and JSON are committable. Ledgers, failure cases and the standalone `dashboard.html` stay local. Out-of-sample needs `--confirm-out-of-sample` and is for reporting only. Data dictionary: `docs/m2_diagnostics.md`. Findings: `reports/m2_diagnostics.md`.
 
-## Historical replay viewer (localhost)
-
-Commands for macOS and Windows: see the command reference above.
-
-`m2-viewer` serves a Streamlit app on 127.0.0.1:8501 that replays the baseline backtest day by day from local files: scanner signals with their outcomes and reason codes, annotated 1-minute SIP candlestick charts with entry, exit, stop and target markers, trades and a daily P&L summary. It shows a **Historical Replay — Not Live** banner, makes no network requests and never reruns a backtest. Before anything is shown, each sample's ledgers are checked against the provenance `m2-diagnostics` recorded, and a mismatched sample is refused with the reason. All times are US Eastern. `m2-chart --date YYYY-MM-DD --session premarket` exports a session's charts to standalone HTML. `m2-viewer-check` audits every total and chart marker the viewer would show against the backtest ledgers, offline. Details, including the canonical CRLF/LF hashing policy: `docs/m2_replay_viewer.md`.
-
-## Dataset backup and restore (private Google Drive via rclone)
-
-`dataset-backup` uploads a dataset folder as an immutable, checksummed snapshot. It is a dry run unless you pass `--confirm`, and a snapshot is marked complete only after the remote copy is verified. `dataset-list` lists snapshots, `dataset-restore` downloads into a new folder and verifies every file before moving it into place, and `dataset-verify` checks a dataset offline. All copies are copy-only and never overwrite. Setup, commands and the licensing caveat: `docs/dataset_backup_restore.md`.
-
 ## Licensed data stays local
 
-Raw bars, quotes, per-symbol tables and input snapshots are Alpaca or third-party data and are git-ignored. Only aggregate outputs are committed: `report.md`, `manifest.json` (including the sha256 of every input snapshot), count-only `eligibility.csv`, `quote_probe_summary.json`, `backtest_summary_*.json` and `diagnostics_*.{json,md}`. The viewer and exported charts stay local.
+Raw bars, quotes, per-symbol tables and input snapshots are Alpaca or third-party data and are git-ignored. Only aggregate outputs are committed: `report.md`, `manifest.json` (including the sha256 of every input snapshot), count-only `eligibility.csv`, `quote_probe_summary.json`, `backtest_summary_*.json` and `diagnostics_*.{json,md}`.
 
 ## Safety
 
 No code path places, replaces or cancels orders; the backtest is an offline simulation with no broker client. Market data comes from `data.alpaca.markets`. The only trading-host call is the read-only `GET /v2/assets` on `paper-api.alpaca.markets`, which refuses live-looking keys. A test enforces both.
+
+## Top 5 and Bull Flag research (exploratory, in-sample only)
+
+`m2-research --dataset <dataset>` ranks the Top 5 gainers within the dataset's cached sub-$20 universe after every completed 1-minute bar (point in time, never market-wide) and backtests two variants of the baseline with the frozen `base_cap50` model: Top 5 filtered breakouts, and Bull Flag breakouts (`bullflag.py`, an untuned detector that reads completed bars only) of Top 5 members. It is cache-only by default (`--fetch-missing-quotes` opts in to quote downloads), refuses the out-of-sample block and fails unless the baseline rerun reproduces the PR #4 ledgers byte for byte. The committed `research_comparison_in_sample.{json,md}` are aggregate only. Method: `docs/m2_top5_research.md`. Results: `reports/m2_top5_bullflag.md`.
 
 ## Tests
 

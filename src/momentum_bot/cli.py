@@ -10,7 +10,7 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import backtest, diagnostics, quotes
+from . import backtest, diagnostics, quotes, research
 from .data.alpaca_assets import AlpacaPaperAssets
 from .data.alpaca_historical import AlpacaHistoricalProvider
 from .data.market_calendar import CalendarCoverageError
@@ -68,6 +68,25 @@ def build_parser() -> argparse.ArgumentParser:
     qp.add_argument("--sample", type=int, default=60, help="Candidates to sample, split evenly by session")
     qp.add_argument("--minutes", type=int, default=30, help="Quote window after each trigger bar")
     qp.add_argument("--seed", type=int, default=20261013, help="Sampling seed")
+    rs = sub.add_parser("m2-research", help="Top 5 (cached universe) variant vs the baseline, in-sample only (no orders).")
+    rs.add_argument("--dataset", required=True, help="Dataset folder built by m1-dataset, with references.csv.gz")
+    rs.add_argument("--skip-build", action="store_true", help="Reuse research/in_sample rankings and signal sets")
+    rs.add_argument("--fetch-missing-quotes", action="store_true",
+                    help="Allow SIP quote downloads for variant signals not in the quote cache (default: cache only)")
+    bi = sub.add_parser("m2-bullflag-intrabar",
+                        help="Bull Flag intrabar breakout research, in-sample, cache-only, read-only (no orders).")
+    bi.add_argument("--dataset", required=True, help="Dataset folder with references.csv.gz")
+    bi.add_argument("--out-dir", default="research_out/bull_flag_intrabar",
+                    help="Per-setup and per-trade outputs (local, git-ignored); never inside the dataset")
+    bi.add_argument("--summary", default="reports/research_program/bull_flag_intrabar_summary.json",
+                    help="Aggregate, symbol-free summary (committed)")
+    bi.add_argument("--quote-cache", default="research_out/bull_flag_intrabar/quote_cache",
+                    help="Research-only SIP quote cache outside the dataset (local, git-ignored)")
+    bi.add_argument("--sessions", nargs="+", choices=("premarket", "afterhours"), default=["premarket", "afterhours"],
+                    help="Sessions to research (default: both)")
+    bi.add_argument("--workers", type=int, default=1, help="Days backtested in parallel processes (default 1)")
+    bi.add_argument("--fetch-missing-quotes", action="store_true",
+                    help="Download SIP quotes for triggered setups not covered by any cache (network; default: off)")
     bt = sub.add_parser("m2-backtest", help="Simulate the breakout strategy against historical SIP quotes (no orders).")
     bt.add_argument("--dataset", required=True, help="Dataset folder built by m1-dataset")
     bt.add_argument("--sample", choices=("in_sample", "out_of_sample"), default="in_sample")
@@ -114,6 +133,10 @@ def main(argv: list[str] | None = None) -> int:
         return _dataset(args)
     if args.command == "m2-quote-probe":
         return _quote_probe(args)
+    if args.command == "m2-research":
+        return _research(args)
+    if args.command == "m2-bullflag-intrabar":
+        return _bullflag_intrabar(args)
     if args.command == "m2-backtest":
         return _backtest(args)
     if args.command == "m2-diagnostics":
@@ -196,6 +219,94 @@ def _quote_probe(args: argparse.Namespace) -> int:
     print(f"quote windows: {status} ({provider.request_count} API requests, 0 orders)")
     print(f"summary: {path}")
     return EXIT_BLOCKED if "entitlement_blocked" in status else EXIT_OK  # type: ignore[operator]
+
+
+def _research(args: argparse.Namespace) -> int:
+    dataset = Path(args.dataset)
+    if not (dataset / "references.csv.gz").is_file():
+        print(f"error: {dataset / 'references.csv.gz'} not found; rerun m1-dataset (cache only) to write it",
+              file=sys.stderr)
+        return EXIT_USAGE
+    provider = diagnostics.CacheOnlySource()  # default: no network; a cache miss fails the run explicitly
+    if args.fetch_missing_quotes:
+        try:
+            provider = AlpacaHistoricalProvider.from_env()
+        except AuthenticationError as exc:
+            print(f"error: {exc}. See .env.example.", file=sys.stderr)
+            return EXIT_USAGE
+    sample = research.IN_SAMPLE  # exploratory variants never touch the inspected hold-out
+    if not args.skip_build:
+        print(research.build(dataset, sample, log=print))
+    cache = dataset / "cache" / "backtest_quotes"
+    blocked: dict[str, dict[str, int]] = {}
+    try:
+        results = research.run_backtests(dataset, backtest.QuoteStore(provider, cache),  # type: ignore[arg-type]
+                                         backtest.QuoteStore(diagnostics.CacheOnlySource(), cache), sample,
+                                         blocked=blocked)
+    except (EntitlementError, AuthenticationError) as exc:
+        print(f"error: SIP quotes blocked: {exc}", file=sys.stderr)
+        return EXIT_BLOCKED
+    except diagnostics.CacheMiss as exc:
+        print(f"error: {exc}; rerun with --fetch-missing-quotes to download them (network)", file=sys.stderr)
+        return EXIT_BLOCKED
+    for k, cov in blocked.items():
+        print(f"{k}: not backtested; quotes for {cov['missing']} of {cov['signals']} signals are not cached "
+              "(rerun with --fetch-missing-quotes to download them)")
+    for k in [k for k in research.STRATEGIES[1:] if k in results]:
+        summary = {"dataset": str(dataset), "code_sha": code_version(), "orders_placed": 0, "network_requests": 0,
+                   "created_at_utc": datetime.now(timezone.utc).isoformat(),
+                   "provenance_variant": research.variant_provenance(dataset, sample, k),
+                   **diagnostics.run(dataset, sample, research.SCENARIO, k)}
+        stem = f"diagnostics_{sample}_{k}_{research.SCENARIO}"
+        (dataset / f"{stem}.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
+        (dataset / f"{stem}.md").write_text(diagnostics.render_report(summary), encoding="utf-8")
+    research.write_table(dataset / "research" / sample / "decisions.csv.gz", research.decisions(dataset, sample))
+    comparison = {"dataset": str(dataset), "code_sha": code_version(),
+                  "created_at_utc": datetime.now(timezone.utc).isoformat(),
+                  "quote_api_requests": provider.request_count, **research.compare(dataset, results, sample, blocked)}
+    stem = f"research_comparison_{sample}"
+    (dataset / f"{stem}.json").write_text(json.dumps(comparison, indent=2, default=str) + "\n", encoding="utf-8")
+    (dataset / f"{stem}.md").write_text(research.render_comparison(comparison), encoding="utf-8")
+    for k, v in comparison["strategies"].items():  # type: ignore[union-attr]
+        if "results" not in v:
+            continue
+        r = v["results"]["all"]
+        print(f"{k}: {r['trades']} trades, expectancy {r['expectancy_r']} R, net ${r['net_usd']:.2f}")
+    print(f"comparison: {dataset / (stem + '.md')} ({provider.request_count} quote API requests, 0 orders)")
+    return EXIT_OK
+
+
+def _bullflag_intrabar(args: argparse.Namespace) -> int:
+    from . import bullflag_intrabar
+
+    dataset, out, qc = Path(args.dataset).resolve(), Path(args.out_dir).resolve(), Path(args.quote_cache).resolve()
+    if any(dataset == x or dataset in x.parents for x in (out, qc)):
+        print("error: --out-dir and --quote-cache must be outside the dataset folder (it is read-only)", file=sys.stderr)
+        return EXIT_USAGE
+    source = None
+    if args.fetch_missing_quotes:
+        try:
+            source = AlpacaHistoricalProvider.from_env()
+        except AuthenticationError as exc:
+            print(f"error: {exc}. See .env.example.", file=sys.stderr)
+            return EXIT_USAGE
+    if not (dataset / "references.csv.gz").is_file():
+        print(f"error: {dataset / 'references.csv.gz'} not found", file=sys.stderr)
+        return EXIT_USAGE
+    result = {"dataset": Path(args.dataset).as_posix(), "code_sha": code_version(),
+              "created_at_utc": datetime.now(timezone.utc).isoformat(),
+              **bullflag_intrabar.run_research(dataset, out, quote_cache=qc, source=source,
+                                               sessions=tuple(args.sessions), workers=args.workers)}
+    path = Path(args.summary)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8", newline="\n")
+    for k, v in result["strategies"].items():  # type: ignore[union-attr]
+        b = v["base"]
+        print(f"{k}: {b['setups_detected']} setups, {b['entries']} entries, {b['completed_trades']} completed, "
+              f"net ${b['net_usd']:.2f}, NBBO-covered setups {v['quote_coverage']['nbbo_covered']}")
+    print(f"summary: {path} (inputs unchanged: {result['inputs_unchanged']}; "
+          f"{result['network_requests']} quote API requests, 0 orders)")
+    return EXIT_OK if result["inputs_unchanged"] else EXIT_MISMATCH
 
 
 def _backtest(args: argparse.Namespace) -> int:
