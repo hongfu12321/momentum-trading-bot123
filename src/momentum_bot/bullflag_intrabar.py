@@ -578,86 +578,122 @@ def fetch_missing(setups: Iterable[Setup], bars_by: Mapping[tuple[str, str, str]
     return {"windows_fetched": done, "windows_failed": failed}
 
 
+def _research_day(job: Mapping[str, object]) -> dict[str, object]:
+    """One trading day end to end (a worker process may run it). ``simulate=False`` only detects
+    setups and downloads missing quotes; otherwise the day is backtested from the caches."""
+    from . import research
+
+    dataset, d = Path(str(job["dataset"])), str(job["day"])
+    p, scan = IntrabarParams(), research.ScanParams(**job["scan"])  # type: ignore[arg-type]
+    refs: Mapping[str, Mapping[str, float]] = job["refs"]  # type: ignore[assignment]
+    quote_cache = Path(str(job["quote_cache"])) if job["quote_cache"] else None
+    index = QuoteIndex(dataset / "cache" / "backtest_quotes", *([quote_cache] if quote_cache else []))
+    windows = session_windows(date.fromisoformat(d))
+    as_of = datetime.fromisoformat(str(job["as_of"]))
+    setups: list[Setup] = []
+    bars_by: dict[tuple[str, str, str], list[Bar]] = {}
+    missing: list[str] = []
+    for session in job["sessions"]:  # type: ignore[union-attr]  # a session left out is not detected, fetched or traded
+        bars = research.load_session_bars(dataset, d, session, as_of)
+        if bars is None:
+            missing.append(f"{d} {session}")
+            continue
+        r = refs.get(session, {})
+        w = windows[session]
+        rank = research.rank_lookup(research.rank_session(w, bars, r, research.RankParams.from_scan(scan)).snapshots)
+        for sym in sorted(x for x in bars if r.get(x, 0) > 0):
+            ctx = research.bar_context(bars[sym], r[sym], w, scan)
+            found = detect_setups(sym, bars[sym], w, p, gate={t: bool(c["candidate_gate"]) for t, c in ctx.items()})
+            for st in found:
+                st.top5_rank = rank.get((sym, st.setup_bar_start_utc.isoformat()))
+            if found:
+                bars_by[(sym, d, session)] = bars[sym]
+                setups += found
+        del bars
+    out: dict[str, object] = {"day": d, "missing": missing}
+    source = job.get("source")
+    if not job["simulate"]:
+        out["fetched"] = (fetch_missing(setups, bars_by, index, quote_cache, source, p)
+                          if source is not None and quote_cache is not None
+                          else {"windows_fetched": 0, "windows_failed": 0})
+        return out
+    cover = {st.setup_id: index.covers(st.symbol, *_quote_window(st, windows[st.session].end_utc, p)) for st in setups}
+    results: dict[tuple[str, str], list[Result]] = {}
+    counts: dict[str, int] = {}
+    covered: dict[str, int] = {}
+    # positions are flat by each session's end, so per-day portfolios add up to one run over all days
+    for k, sts in {"bf_intrabar": setups, "top5_bf_intrabar": [x for x in setups if x.top5_rank is not None]}.items():
+        counts[k], covered[k] = len(sts), sum(cover[x.setup_id] for x in sts)
+        for name, (cfg, cost) in scenarios().items():
+            results[(k, name)] = run_portfolio(sts, bars_by, index, cfg, p, ohlc_cost_bps=cost)
+    out.update(results=results, counts=counts, covered=covered, setup_rows=[
+        {"setup_id": x.setup_id, "symbol": x.symbol, "trading_date": x.trading_date, "session": x.session,
+         "known_utc": x.known_utc.isoformat(), "expires_utc": x.expires_utc.isoformat(), "level": x.level,
+         "stop": x.stop, "top5_rank": x.top5_rank, "nbbo_covered": cover[x.setup_id], **x.detail} for x in setups])
+    return out
+
+
 def run_research(dataset: Path, out_dir: Path, sample: str = "in_sample", log=print,  # noqa: ANN001
                  quote_cache: Path | None = None, source: object | None = None,
-                 sessions: tuple[str, ...] = EXTENDED_SESSIONS) -> dict[str, object]:
+                 sessions: tuple[str, ...] = EXTENDED_SESSIONS, workers: int = 1) -> dict[str, object]:
     """Detect setups on every in-sample session and backtest both variants under the base and the
     predeclared stress assumptions. Reads the dataset and its quote cache, never writing to either.
     ``quote_cache`` is an extra, research-only quote cache outside the dataset; with ``source`` the
-    missing setup windows are downloaded into it first."""
+    missing setup windows are downloaded into it first, in one serial pass, so concurrent workers
+    never call the data API. ``workers`` > 1 backtests days in parallel processes; results are
+    collected in day order and equal a serial run's."""
     from . import research
 
     if sample != research.IN_SAMPLE:
         raise ValueError("the Bull Flag intrabar strategy is exploratory: in-sample only")
+    if not set(sessions) <= set(EXTENDED_SESSIONS):
+        raise ValueError(f"sessions must be among {EXTENDED_SESSIONS}")
     manifest = json.loads((dataset / "manifest.json").read_text(encoding="utf-8"))
     days = research.sample_days(manifest, sample)
     before = sha256_files(_inputs(dataset, set(days)))
-    as_of = datetime.fromisoformat(manifest["as_of_utc"])
-    scan = research.ScanParams(**manifest["scan_params"])
     refs = research.load_references(dataset)
-    index = QuoteIndex(dataset / "cache" / "backtest_quotes", *([quote_cache] if quote_cache else []))
     p = IntrabarParams()
+
+    def job(d: str, simulate: bool) -> dict[str, object]:
+        return {"dataset": str(dataset), "day": d, "sessions": tuple(sessions), "as_of": manifest["as_of_utc"],
+                "scan": manifest["scan_params"], "refs": {x: dict(refs.get((d, x), {})) for x in sessions},
+                "quote_cache": str(quote_cache) if quote_cache else "", "simulate": simulate,
+                **({"source": source} if not simulate else {})}
+
     fetched = {"windows_fetched": 0, "windows_failed": 0}
-    if not set(sessions) <= set(EXTENDED_SESSIONS):
-        raise ValueError(f"sessions must be among {EXTENDED_SESSIONS}")
-    missing: list[str] = []
-    results: dict[tuple[str, str], list[Result]] = defaultdict(list)
-    counts: Counter[str] = Counter()
-    covered: Counter[str] = Counter()
-    setup_rows: list[dict[str, object]] = []
-    for d in days:  # one trading day at a time: its bars and quotes are released before the next day
-        windows = session_windows(date.fromisoformat(d))
-        setups: list[Setup] = []
-        bars_by: dict[tuple[str, str, str], list[Bar]] = {}
-        for session in sessions:  # a session left out is neither detected, fetched nor traded
-            bars = research.load_session_bars(dataset, d, session, as_of)
-            if bars is None:
-                missing.append(f"{d} {session}")
-                continue
-            r = refs.get((d, session), {})
-            w = windows[session]
-            rank = research.rank_lookup(research.rank_session(w, bars, r, research.RankParams.from_scan(scan)).snapshots)
-            for sym in sorted(x for x in bars if r.get(x, 0) > 0):
-                ctx = research.bar_context(bars[sym], r[sym], w, scan)
-                found = detect_setups(sym, bars[sym], w, p, gate={t: bool(c["candidate_gate"]) for t, c in ctx.items()})
-                for st in found:
-                    st.top5_rank = rank.get((sym, st.setup_bar_start_utc.isoformat()))
-                if found:
-                    bars_by[(sym, d, session)] = bars[sym]
-                    setups += found
-            del bars
-        if source is not None and quote_cache is not None:
-            got = fetch_missing(setups, bars_by, index, quote_cache, source, p)
-            fetched = {k: fetched[k] + got[k] for k in fetched}
-        cover = {st.setup_id: index.covers(st.symbol, *_quote_window(st, windows[st.session].end_utc, p))
-                 for st in setups}
-        # positions are flat by each session's end, so per-day portfolios equal one run over all days
-        for k, sts in {"bf_intrabar": setups, "top5_bf_intrabar": [x for x in setups if x.top5_rank is not None]}.items():
-            counts[k] += len(sts)
-            covered[k] += sum(cover[x.setup_id] for x in sts)
-            for name, (cfg, cost) in scenarios().items():
-                results[(k, name)] += run_portfolio(sts, bars_by, index, cfg, p, ohlc_cost_bps=cost)
-        setup_rows += [{"setup_id": x.setup_id, "symbol": x.symbol, "trading_date": x.trading_date,
-                        "session": x.session, "known_utc": x.known_utc.isoformat(),
-                        "expires_utc": x.expires_utc.isoformat(), "level": x.level, "stop": x.stop,
-                        "top5_rank": x.top5_rank, "nbbo_covered": cover[x.setup_id], **x.detail} for x in setups]
-        index.forget()
-        log(f"{d}: {counts['bf_intrabar']} setups so far; quotes {fetched}")
+    if source is not None and quote_cache is not None:
+        for d in days:  # serial: one client, no concurrent API calls
+            got = _research_day(job(d, False))["fetched"]
+            fetched = {k: fetched[k] + got[k] for k in fetched}  # type: ignore[index]
+            log(f"{d}: quotes {fetched}")
+    jobs = [job(d, True) for d in days]
+    if workers > 1:
+        from concurrent.futures import ProcessPoolExecutor
+
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            parts = list(pool.map(_research_day, jobs))  # day order is kept
+    else:
+        parts = []
+        for j in jobs:
+            parts.append(_research_day(j))
+            log(f"{j['day']}: backtested")
+    missing = [m for x in parts for m in x["missing"]]  # type: ignore[attr-defined]
     out_dir.mkdir(parents=True, exist_ok=True)
     summary: dict[str, object] = {}
     for k in STRATEGIES:
-        entry: dict[str, object] = {"label": LABELS[k], "quote_coverage": {"setups": counts[k],
-                                                                           "nbbo_covered": covered[k]}}
+        n = sum(x["counts"][k] for x in parts)  # type: ignore[index]
+        entry: dict[str, object] = {"label": LABELS[k], "quote_coverage": {
+            "setups": n, "nbbo_covered": sum(x["covered"][k] for x in parts)}}  # type: ignore[index]
         for name in scenarios():
-            res = results[(k, name)]
-            entry[name] = summarize(res, counts[k])
+            res = [r for x in parts for r in x["results"][(k, name)]]  # type: ignore[index]
+            entry[name] = summarize(res, n)
             research.write_table(out_dir / f"{k}_{name}_results.csv", result_rows(res))  # type: ignore[arg-type]
         summary[k] = entry
-    research.write_table(out_dir / "setups.csv.gz", setup_rows)
+    research.write_table(out_dir / "setups.csv.gz", [r for x in parts for r in x["setup_rows"]])  # type: ignore[attr-defined]
     after = sha256_files(_inputs(dataset, set(days)))
-    return {"sample": sample, "days": len(days), "sessions": list(sessions), "sessions_missing_bars": missing, "orders_placed": 0,
-            "network_requests": getattr(source, "request_count", 0), "research_quote_cache": fetched,
-            "trade_prints_cached": False,
+    return {"sample": sample, "days": len(days), "sessions": list(sessions), "sessions_missing_bars": missing,
+            "orders_placed": 0, "network_requests": getattr(source, "request_count", 0),
+            "research_quote_cache": fetched, "trade_prints_cached": False,
             "params": {k: (str(v) if isinstance(v, timedelta) else v) for k, v in asdict(p).items()},
             "stress": {"nbbo": "latency 2 s, 50% of displayed size, 10 bps adverse",
                        "ohlc_cost_bps_per_side": STRESS_OHLC_COST_BPS},
